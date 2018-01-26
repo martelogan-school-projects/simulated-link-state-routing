@@ -29,7 +29,7 @@ Development
 
 Our development workflow will be simple:
 
-**Always develop on your own branch. Only merge code to Master via PR's, only merge code that has no conflicts with master,only merge code that builds successfully via _maven clean install -U_**
+**Always develop on your own branch. Only merge code to Master via PR's, only merge code that has no conflicts with master, only merge code that builds successfully via _maven clean install -U_**
 
 Execution
 ------------
