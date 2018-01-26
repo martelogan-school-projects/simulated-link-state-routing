@@ -34,14 +34,14 @@ Our development workflow will be simple:
 Execution
 ------------
 
-From the command line, we can execute by running:
+From the command line, we can initialize a router instance by first assembling a single jar file via the command:
     ```
        mvn clean compile assembly:single
     ```
 
 followed by 
     ```
-       java -jar -cp router.jar config.conf
+       java -cp "\<project-directory\>/target/COMP535-1.0-SNAPSHOT-jar-with-dependencies.jar" \<project-directory\>/\<router-num\>.conf
     ```
 
 However, running via IntelliJ is usually more convenient.
