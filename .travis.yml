@@ -1,0 +1,12 @@
+language: java
+sudo: false
+
+jdk:
+  - openjdk7
+  - oraclejdk8
+
+script:
+  - mvn
+
+after_success:
+- mvn compile assembly:single

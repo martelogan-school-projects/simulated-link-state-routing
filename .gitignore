@@ -1,3 +1,7 @@
+# ** CUSTOM IGNORES **
+
+target/*
+
 # ** STANDARD GITHUB JAVA IGNORES **
 
 # Compiled class file
