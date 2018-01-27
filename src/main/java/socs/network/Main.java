@@ -1,7 +1,7 @@
 package socs.network;
 
 import socs.network.node.Router;
-import socs.network.util.RouterConfiguration;
+import socs.network.net_utils.RouterConfiguration;
 
 public class Main {
 

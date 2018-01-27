@@ -2,7 +2,7 @@ package socs.network.node;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import socs.network.util.RouterConfiguration;
+import socs.network.net_utils.RouterConfiguration;
 
 /**
  * Encapsulating class for a router (ie. single node) in our network.
@@ -29,9 +29,13 @@ public class Router {
    */
   Link[] ports = new Link[NUM_PORTS_PER_ROUTER];
 
+  /**
+   * Constructor to instantiate a Router via input RouterConfiguration parameters.
+   */
   public Router(RouterConfiguration config) {
-    rd.simulatedIpAddress = config.getString("socs.network.router.ip");
+    rd.simulatedIpAddress = config.getSimulatedIpAddress();
     lsd = new LinkStateDatabase(rd);
+
   }
 
   /**
@@ -57,13 +61,41 @@ public class Router {
 
   /**
    * Attach the link to the remote router, which is identified by the given simulated ip. To
-   * establish the connection via socket, you need to indentify the process IP and process Port;
-   * additionally, weight is the cost to transmitting data through the link
+   * establish the connection via socket, you need to identify the process IP and process Port.
+   * Additionally, weight is the cost of transmitting data through the link.
    * <p/>
-   * NOTE: this command should not trigger link database synchronization
+   * NOTE: This command should not trigger link database synchronization
    */
-  private void processAttach(String processIp, short processPort,
-      String simulatedIp, short weight) {
+  private void processAttach(String remoteProcessIp, short remoteProcessPort,
+      String remoteSimulatedIp, short linkWeight) {
+
+    // verify that we are not attempting self-attachment
+    if (remoteSimulatedIp.equals(this.rd.simulatedIpAddress)) {
+      System.out.println("\n\nError: cannot input IP of current router.");
+      System.out.println("Please enter a valid remote IP address at which to attach.\n\n");
+      return;
+    }
+
+    // find free port at which to link remote router
+    int indexOfFreePort = RouterUtils.findIndexOfFreePort(ports, remoteSimulatedIp);
+
+    // verify that a valid port was indeed available (else, return immediately)
+    switch (indexOfFreePort) {
+      case RouterUtils.NO_PORT_AVAILABLE_FLAG:
+        System.out.println("\n\nNo free port available on current router at this time.\n\n");
+        return;
+      case RouterUtils.DUPLICATE_ATTACHMENT_ATTEMPT_FLAG:
+        System.out.println("\n\nError: cannot attach twice to a given remote IP.");
+        System.out.println("Please enter a valid remote IP address at which to attach.\n\n");
+        return;
+    }
+
+    // a port was available, let's create a description for our remote router
+    RouterDescription remoteRouterDescription =
+        RouterUtils.createRouterDescription(remoteProcessIp, remoteProcessPort, remoteSimulatedIp);
+
+    // attach the link to the free port of our array
+    ports[indexOfFreePort] = new Link(this.rd, remoteRouterDescription);
 
   }
 
@@ -71,6 +103,8 @@ public class Router {
    * Broadcast Hello to neighbors.
    */
   private void processStart() {
+
+    // TODO:
 
   }
 

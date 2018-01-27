@@ -1,11 +1,12 @@
 package socs.network.node;
 
 /**
- * Status of the router. In this simplified version of routing protocol, we only define INIT and
- * TWO_WAY for database synchronization, you can choose to keep other status by adding more fields
- * in router class or you can add more options here.
+ * Status of the router. UKNOWN means the RouterStatus is currently undetermined. INIT means we have
+ * received the initial HELLO from the origin router. TWO_WAY means we have received an ACK for the
+ * initial HELLO.
  */
 public enum RouterStatus {
+  UNKNOWN,
   INIT,
   TWO_WAY,
 }
