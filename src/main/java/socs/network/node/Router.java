@@ -1,39 +1,53 @@
 package socs.network.node;
 
-import socs.network.util.Configuration;
-
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import socs.network.util.RouterConfiguration;
 
-
+/**
+ * Encapsulating class for a router (ie. single node) in our network.
+ */
 public class Router {
 
+  /**
+   * Int constant for fixed-size of ports array.
+   */
+  static final int NUM_PORTS_PER_ROUTER = 4;
+
+  /**
+   * LSD instance for this router (captures state of this router's knowledge on LSA broadcasts).
+   */
   protected LinkStateDatabase lsd;
 
+  /**
+   * Description summarizing state of this router (ie. single node) in our network.
+   */
   RouterDescription rd = new RouterDescription();
 
-  //assuming that all routers are with 4 ports
-  Link[] ports = new Link[4];
+  /**
+   * Fixed-size array maintaining state of ports exposed to link with other routers in our network.
+   */
+  Link[] ports = new Link[NUM_PORTS_PER_ROUTER];
 
-  public Router(Configuration config) {
-    rd.simulatedIPAddress = config.getString("socs.network.router.ip");
+  public Router(RouterConfiguration config) {
+    rd.simulatedIpAddress = config.getString("socs.network.router.ip");
     lsd = new LinkStateDatabase(rd);
   }
 
   /**
-   * output the shortest path to the given destination ip
+   * Output the shortest path to the given destination ip.
    * <p/>
    * format: source ip address  -> ip address -> ... -> destination ip
    *
-   * @param destinationIP the ip adderss of the destination simulated router
+   * @param destinationIp the ip address of the destination simulated router
    */
-  private void processDetect(String destinationIP) {
+  private void processDetect(String destinationIp) {
 
   }
 
   /**
-   * disconnect with the router identified by the given destination ip address
-   * Notice: this command should trigger the synchronization of database
+   * Disconnect with the router identified by the given destination ip address. Notice: this command
+   * should trigger the synchronization of database
    *
    * @param portNumber the port number which the link attaches at
    */
@@ -42,50 +56,53 @@ public class Router {
   }
 
   /**
-   * attach the link to the remote router, which is identified by the given simulated ip;
-   * to establish the connection via socket, you need to indentify the process IP and process Port;
+   * Attach the link to the remote router, which is identified by the given simulated ip. To
+   * establish the connection via socket, you need to indentify the process IP and process Port;
    * additionally, weight is the cost to transmitting data through the link
    * <p/>
    * NOTE: this command should not trigger link database synchronization
    */
-  private void processAttach(String processIP, short processPort,
-                             String simulatedIP, short weight) {
+  private void processAttach(String processIp, short processPort,
+      String simulatedIp, short weight) {
 
   }
 
   /**
-   * broadcast Hello to neighbors
+   * Broadcast Hello to neighbors.
    */
   private void processStart() {
 
   }
 
   /**
-   * attach the link to the remote router, which is identified by the given simulated ip;
-   * to establish the connection via socket, you need to indentify the process IP and process Port;
-   * additionally, weight is the cost to transmitting data through the link
+   * Attach the link to the remote router, which is identified by the given simulated ip. To
+   * establish the connection via socket, you need to identify the process IP and process Port.
+   * Additionally, weight is the cost to transmitting data through the link
    * <p/>
    * This command does trigger the link database synchronization
    */
-  private void processConnect(String processIP, short processPort,
-                              String simulatedIP, short weight) {
+  private void processConnect(String processIp, short processPort,
+      String simulatedIp, short weight) {
 
   }
 
   /**
-   * output the neighbors of the routers
+   * Output the neighbors of the routers.
    */
   private void processNeighbors() {
 
   }
 
   /**
-   * disconnect with all neighbors and quit the program
+   * Disconnect with all neighbors and quit the program.
    */
   private void processQuit() {
 
   }
 
+  /**
+   * Interpret user input from the command line.
+   */
   public void terminal() {
     try {
       InputStreamReader isReader = new InputStreamReader(System.in);
@@ -104,18 +121,18 @@ public class Router {
         } else if (command.startsWith("attach ")) {
           String[] cmdLine = command.split(" ");
           processAttach(cmdLine[1], Short.parseShort(cmdLine[2]),
-                  cmdLine[3], Short.parseShort(cmdLine[4]));
+              cmdLine[3], Short.parseShort(cmdLine[4]));
         } else if (command.equals("start")) {
           processStart();
         } else if (command.equals("connect ")) {
           String[] cmdLine = command.split(" ");
           processConnect(cmdLine[1], Short.parseShort(cmdLine[2]),
-                  cmdLine[3], Short.parseShort(cmdLine[4]));
+              cmdLine[3], Short.parseShort(cmdLine[4]));
         } else if (command.equals("neighbors")) {
-          //output neighbors
+          // output neighbors
           processNeighbors();
         } else {
-          //invalid command
+          // invalid command
           break;
         }
         System.out.print(">> ");

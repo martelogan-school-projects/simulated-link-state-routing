@@ -1,11 +1,29 @@
 package socs.network.node;
 
+/**
+ * Description summarizing state of router (ie. single node) in our network.
+ */
 public class RouterDescription {
-  //used to socket communication
-  String processIPAddress;
+
+  /**
+   * Process IP tied to this router's exposed socket instance.
+   */
+  String processIpAddress;
+
+  /**
+   * Process port number tied to this router's exposed socket instance.
+   */
   short processPortNumber;
-  //used to identify the router in the simulated network space
-  String simulatedIPAddress;
-  //status of the router
+
+
+  /**
+   * Unique IP address to identify the router in our simulated network space.
+   */
+  String simulatedIpAddress;
+
+
+  /**
+   * Router's current discrete category of RouterStatus Enum.
+   */
   RouterStatus status;
 }
