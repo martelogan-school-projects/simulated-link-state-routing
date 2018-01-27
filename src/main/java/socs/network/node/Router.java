@@ -104,7 +104,7 @@ public class Router {
    */
   private void processStart() {
 
-    // TODO:
+    // TODO: iterate over each link in ports and attempt to broadcast HELLO
 
   }
 
@@ -124,7 +124,7 @@ public class Router {
    * Output the neighbors of the routers.
    */
   private void processNeighbors() {
-
+    // TODO: iterate over each non-null link in ports and print the neighbour IP for each
   }
 
   /**
