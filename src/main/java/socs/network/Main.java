@@ -1,14 +1,14 @@
 package socs.network;
 
-import socs.network.node.Router;
 import socs.network.net_utils.RouterConfiguration;
+import socs.network.node.Router;
 
 public class Main {
 
   /**
    * Main routine to drive router instantiation.
    */
-  public static void main(String[] args) {
+  public static void main(String[] args) throws Exception {
     if (args.length != 1) {
       System.out.println("usage: program conf_path");
       System.exit(1);

@@ -9,6 +9,21 @@ import java.util.Vector;
 public class SospfPacket implements Serializable {
 
   /**
+   * Int constant to flag that SospfPacket is responding to client that no ports are available.
+   */
+  public static final short SOSPF_NO_PORTS_AVAILABLE = -1;
+
+  /**
+   * Int constant to flag that SospfPacket is a HELLO request.
+   */
+  public static final short SOSPF_HELLO = 0;
+
+  /**
+   * Int constant to flag that SospfPacket is an LSAUPDATE request.
+   */
+  public static final short SOSPF_LSAUPDATE = 1;
+
+  /**
    * Process IP address of source router.
    */
   public String srcProcessIp;
