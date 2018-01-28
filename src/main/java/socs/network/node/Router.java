@@ -82,6 +82,13 @@ public class Router {
     // surviving the above, let's instantiate an LSD for our Router
     lsd = new LinkStateDatabase(rd);
 
+    // notify details of our router instance
+    System.out.println("\nSuccessfully started router instance at:\n");
+    System.out.println("Simulated IP = " + rd.simulatedIpAddress);
+    System.out.println("Process IP = " + rd.processIpAddress);
+    System.out.println("Process Port Number = " + rd.processPortNumber);
+    System.out.println("\n");
+
   }
 
   /**
@@ -164,6 +171,13 @@ public class Router {
 
     // attach the link to the free port of our array
     ports[indexOfFreePort] = new Link(this.rd, remoteRouterDescription);
+
+    // notify details of successful attachment
+    System.out.println("\n\nSuccessfully attached to remote router at:\n");
+    System.out.println("Simulated IP = " + remoteSimulatedIp);
+    System.out.println("Process IP = " + remoteProcessIp);
+    System.out.println("Process Port Number = " + remoteProcessPort);
+    System.out.println("\n");
 
   }
 
@@ -268,11 +282,33 @@ public class Router {
    */
   private void processNeighbors() {
     // TODO: iterate over each non-null link in ports and print the neighbour IP for each
+    // clear some space four our upcoming console output
+    System.out.println("\n\n");
+    // iterate over each link in our ports array
+    boolean foundAtLeastOneNeighbor = false;
+    int curPortIndex = 0;
+    for (Link curLink : ports) {
+      if (curLink != null) {
+        // found a neighbor: output this to the console
+        foundAtLeastOneNeighbor = true;
+        System.out.println(
+            "IP Address of the neighbour linked at outbound port index "
+                + curPortIndex + " is: " + curLink.router2.simulatedIpAddress + "\n");
+      }
+      curPortIndex += 1;
+    }
+    if (!foundAtLeastOneNeighbor) {
+      // no neighboring routers attached to Link[] ports array
+      System.out.println(
+          "No neighbouring routers are currently linked to our outbound ports.\n");
+    }
+    System.out.println("\n");
   }
 
   /**
    * Disconnect with all neighbors and quit the program.
    */
+
   private void processQuit() {
 
   }

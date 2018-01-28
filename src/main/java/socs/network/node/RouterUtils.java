@@ -72,7 +72,10 @@ public final class RouterUtils {
       Link curLink = ports[curIndex];
       if (ports[curIndex] == null) {
         // found a free port (continue scanning to verify against duplicate attachment)
-        indexOfFreePort = curIndex;
+        if (indexOfFreePort == NO_PORT_AVAILABLE_FLAG) {
+          // only set this if we hadn't already found a free port (prefers lowest index first)
+          indexOfFreePort = curIndex;
+        }
       } else if (curLink.router2.simulatedIpAddress.equals(simulatedIpOfTarget)) {
         // return immediately to flag duplicate attachment attempt
         return DUPLICATE_ATTACHMENT_ATTEMPT_FLAG;
