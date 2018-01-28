@@ -5,7 +5,7 @@ COMP 535 - Simulated Link State Routing Protocol
 Description
 -------------
 
-This repo - initialized via the provided _comp535_sketch_code_
+This repo, initialized via the provided _comp535_sketch_code_,
 will serve as a base for Project Group 35's COMP 535 - Computer Networks Project. 
 
 Installation
@@ -29,7 +29,7 @@ Development
 
 Our development workflow will be simple:
 
-**Always develop on your own branch. Only merge code to Master via PR's, only merge code that has no conflicts with master, only merge code that builds successfully via _maven clean install -U_**
+**Always develop on your own branch. Only merge code to Master via PR's. Only merge code that has no conflicts with master. Only merge code that builds successfully via _maven clean install -U_**.
 
 Execution
 ------------
@@ -64,4 +64,4 @@ This code is under the [GNU General Public License v3.0](https://www.gnu.org/lic
 If you use or modify comp-535-networks-project, please credit the original authors as
 
 * Logan Martel - https://github.com/martelogan
-* Abdullah Abudan - https://github.com/aabuden
+* Abdullah Abudan - https://github.com/aabudan
