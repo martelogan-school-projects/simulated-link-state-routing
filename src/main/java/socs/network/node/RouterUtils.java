@@ -10,7 +10,7 @@ import socs.network.message.SospfPacket;
 /**
  * Static utilities class to assist Router instances.
  */
-public final class RouterUtils {
+final class RouterUtils {
 
   /**
    * Int constant to flag that no port is available at this time.
@@ -31,7 +31,7 @@ public final class RouterUtils {
   /**
    * Static helper method to create a RouterDescription via input params.
    */
-  public static RouterDescription createRouterDescription(String processIp,
+  static RouterDescription createRouterDescription(String processIp,
       short processPortNumber, String simulatedIp) {
     RouterDescription rd = new RouterDescription();
     rd.processIpAddress = processIp;
@@ -44,7 +44,7 @@ public final class RouterUtils {
   /**
    * Static helper method to create a SospfPacket via input params.
    */
-  public static SospfPacket creatSospfPacket(
+  static SospfPacket createSospfPacket(
       String srcProcessIp, short srcProcessPort,
       String srcSimulatedIp, String destSimulatedIp,
       short sospfType, String routerId,
@@ -62,12 +62,26 @@ public final class RouterUtils {
   }
 
   /**
+   * Static method to verify Link[] ports array and target IP address input combination.
+   */
+  private static void verifyPortsAndTargetIpNotNull(Link[] ports, String simulatedIpOfTarget) {
+    if (ports == null) {
+      throw new IllegalArgumentException("Cannot index into null ports array!");
+    }
+    if (simulatedIpOfTarget == null) {
+      throw new IllegalArgumentException("Cannot establish link with null target IP!");
+    }
+  }
+
+  /**
    * Finds unoccupied port in input Link[] array (or returns flag indicating error).
    */
-  public static int findIndexOfFreePort(Link[] ports, String simulatedIpOfTarget) {
+  static int findIndexOfFreePort(Link[] ports, String simulatedIpOfTarget) {
+    // verify input arguments
+    verifyPortsAndTargetIpNotNull(ports, simulatedIpOfTarget);
+    // iterate over all ports to verify against duplicate attachment
     int indexOfFreePort = NO_PORT_AVAILABLE_FLAG;
     int curIndex;
-    // iterate over all ports to verify against duplicate attachment
     for (curIndex = 0; curIndex < Router.NUM_PORTS_PER_ROUTER; curIndex++) {
       Link curLink = ports[curIndex];
       if (ports[curIndex] == null) {
@@ -88,9 +102,11 @@ public final class RouterUtils {
    * Finds index of the port in input Link[] array attached to the input remote router (or returns
    * flag indicating error).
    */
-  public static int findIndexOfPortAttachedTo(Link[] ports, String simulatedIpOfTarget) {
-    int curIndex;
+  static int findIndexOfPortAttachedTo(Link[] ports, String simulatedIpOfTarget) {
+    // verify input arguments
+    verifyPortsAndTargetIpNotNull(ports, simulatedIpOfTarget);
     // iterate over all ports seeking attachment with simulatedIpOfTarget
+    int curIndex;
     for (curIndex = 0; curIndex < Router.NUM_PORTS_PER_ROUTER; curIndex++) {
       Link curLink = ports[curIndex];
       if (ports[curIndex] != null
@@ -105,13 +121,14 @@ public final class RouterUtils {
   /**
    * Close client-server I/O socket connection.
    */
-  public static boolean closeIoSocketConnection(
+  static boolean closeIoSocketConnection(
       Socket ioSocket, ObjectInputStream inFromServer, ObjectOutputStream outToServer) {
     try {
       if (inFromServer != null) {
         inFromServer.close();
       }
       if (outToServer != null) {
+        outToServer.flush();
         outToServer.close();
       }
       if (ioSocket != null) {
@@ -131,7 +148,7 @@ public final class RouterUtils {
   /**
    * Static method to format output of process-process communication exception.
    */
-  public static void alertInterprocessException(Exception e, String customMessage) {
+  static void alertInterprocessException(Exception e, String customMessage) {
     System.out.println(customMessage);
     System.out.println("\n\nFailed with Exception: \n\n");
     e.printStackTrace();
@@ -141,7 +158,7 @@ public final class RouterUtils {
   /**
    * Static method to alert response that no ports are available at remote.
    */
-  public static void alertNoPortsAvailableAtRemote(SospfPacket responsePacket) {
+  private static void alertNoPortsAvailableAtRemote(SospfPacket responsePacket) {
     String alertMessageOfNoPortsAvailableAtTargetRouter =
         "\n\n Error: Received response that no ports are available to establish a "
             + "connection at remote with (SimulatedIP = "
@@ -152,7 +169,7 @@ public final class RouterUtils {
   /**
    * Static method to raise exception on receiving invalid response packet at client.
    */
-  public static void raiseInvalidResponseException(short packetType) throws Exception {
+  private static void raiseInvalidResponseException(short packetType) throws Exception {
     String exceptionMessageOfInvalidSospfType =
         "Received packet at client "
             + "with invalid (SospfPacketType = " + packetType + " ) ";
@@ -162,7 +179,7 @@ public final class RouterUtils {
   /**
    * Static method to raise exception on receiving invalid response packet at client.
    */
-  public static void raiseUnknownResponseException(short packetType) throws Exception {
+  private static void raiseUnknownResponseException(short packetType) throws Exception {
     String exceptionMessageOfFailedResponseHandling =
         "Received packet with unknown (SospfPacketType = " + packetType + " ) ";
     throw new Exception(exceptionMessageOfFailedResponseHandling);
@@ -171,9 +188,15 @@ public final class RouterUtils {
   /**
    * Static method to deserialize SospfPacket from given input stream.
    */
-  public static SospfPacket deserializeSospfPacketFromInputStream(
+  static SospfPacket deserializeSospfPacketFromInputStream(
       ObjectInputStream inFromRemoteServer, Socket activeSocket) throws Exception {
     try {
+      if (inFromRemoteServer == null) {
+        throw new IllegalArgumentException("Received null input stream!");
+      }
+      if (activeSocket == null) {
+        throw new IllegalArgumentException("Received null socket connection!");
+      }
       // attempt to read raw binary of packet as generic object
       Object inputRequestRaw = inFromRemoteServer.readObject();
       if (inputRequestRaw == null) {
@@ -183,8 +206,8 @@ public final class RouterUtils {
       return (SospfPacket) inputRequestRaw;
     } catch (Exception e) {
       String alertMessageOfFailedInputStreamParsing =
-          "\n\nError: Failed to parse input stream to SospfPacket at socket "
-              + activeSocket + " \n\n";
+          "\n\nError: Failed to parse input stream to SospfPacket at socket '"
+              + activeSocket + "' \n\n";
       RouterUtils.alertInterprocessException(e, alertMessageOfFailedInputStreamParsing);
       // important to raise exception here to defer control flow & close connections
       throw e;
@@ -192,11 +215,25 @@ public final class RouterUtils {
   }
 
   /**
+   * Static method to verify link and packet input combination.
+   */
+  private static void verifyLinkAndPacketNotNull(Link link, SospfPacket packet) {
+    if (link == null) {
+      throw new IllegalArgumentException("Trying to message over null communication link!");
+    }
+    if (packet == null) {
+      throw new IllegalArgumentException("Trying to send null response packet!");
+    }
+  }
+
+  /**
    * Static method to respond at client to HELLO broadcast reply.
    */
   private static void respondAtClientToHelloReply(Link curLink, SospfPacket responsePacket) {
-    String remotedSimulatedIpAddress = responsePacket.srcIp;
+    // verify input arguments
+    verifyLinkAndPacketNotNull(curLink, responsePacket);
     // ** ESSENTIAL PRINT STATEMENT FOR PA1 DELIVERABLE **
+    String remotedSimulatedIpAddress = responsePacket.srcIp;
     System.out.println("\nreceived HELLO from " + remotedSimulatedIpAddress + ";");
     // importantly, we can now finally set remote RouterStatus to TWO_WAY
     curLink.router2.status = RouterStatus.TWO_WAY;
@@ -207,12 +244,15 @@ public final class RouterUtils {
   /**
    * Static helper method to route and handle reply to HELLO broadcast at client.
    */
-  public static void handleHelloReplyAtClient(SospfPacket responsePacket, Link curLink)
+  static void handleHelloReplyAtClient(Link curLink, SospfPacket responsePacket)
       throws Exception {
+    // verify input arguments
+    verifyLinkAndPacketNotNull(curLink, responsePacket);
+    // handle response depending on SOSPF status
     short packetType = responsePacket.sospfType;
     switch (packetType) {
       case SospfPacket.SOSPF_NO_PORTS_AVAILABLE:
-        //TODO: should we also disconnect the attachment locally here?
+        //TODO: should we also disconnect the attachment locally here? (TA: "doesn't matter")
         RouterUtils.alertNoPortsAvailableAtRemote(responsePacket);
         break;
       case SospfPacket.SOSPF_HELLO:
@@ -230,8 +270,10 @@ public final class RouterUtils {
    * Static method to respond at remote to HELLO broadcast reply.
    */
   private static void respondAtRemoteToHelloReply(Link curLink, SospfPacket responsePacket) {
-    String remotedSimulatedIpAddress = responsePacket.srcIp;
+    // verify input arguments
+    verifyLinkAndPacketNotNull(curLink, responsePacket);
     // ** ESSENTIAL PRINT STATEMENT FOR PA1 DELIVERABLE **
+    String remotedSimulatedIpAddress = responsePacket.srcIp;
     System.out.println("\nreceived HELLO from " + remotedSimulatedIpAddress + ";");
     // importantly, we can now finally set remote RouterStatus to TWO_WAY
     curLink.router2.status = RouterStatus.TWO_WAY;
@@ -244,8 +286,11 @@ public final class RouterUtils {
   /**
    * Static helper method to route and handle reply to HELLO broadcast at remote router.
    */
-  public static void handleHelloReplyAtRemote(SospfPacket responsePacket, Link curLink)
+  static void handleHelloReplyAtRemote(Link curLink, SospfPacket responsePacket)
       throws Exception {
+    // verify input arguments
+    verifyLinkAndPacketNotNull(curLink, responsePacket);
+    // handle response depending on SOSPF status
     short packetType = responsePacket.sospfType;
     switch (packetType) {
       case SospfPacket.SOSPF_HELLO:

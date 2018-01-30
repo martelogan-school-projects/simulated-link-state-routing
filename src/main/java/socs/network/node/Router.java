@@ -23,12 +23,12 @@ public class Router {
   /**
    * Int constant for initial attempt at port assignment.
    */
-  static final short MIN_PROCESS_PORT_NUMBER = 20000;
+  private static final short MIN_PROCESS_PORT_NUMBER = 20000;
 
   /**
    * Int constant for max value of attempted port assignment.
    */
-  static final short MAX_PROCESS_PORT_NUMBER = Short.MAX_VALUE;
+  private static final short MAX_PROCESS_PORT_NUMBER = Short.MAX_VALUE;
 
   /**
    * LSD instance for this router (captures state of this router's knowledge on LSA broadcasts).
@@ -49,6 +49,10 @@ public class Router {
    * Constructor to instantiate a Router via input RouterConfiguration parameters.
    */
   public Router(RouterConfiguration config) throws Exception {
+
+    if (config == null) {
+      throw new IllegalArgumentException("Cannot instantiate router with null input config.");
+    }
 
     // assign simulated IP address from config file
     rd.simulatedIpAddress = config.getSimulatedIpAddress();
@@ -115,7 +119,7 @@ public class Router {
   /**
    * Helper method to report if port is occupied in input Link[] array.
    */
-  public static boolean checkAndAlertPortOccupationStatus(Link[] ports, int portIndex) {
+  public boolean checkAndAlertPortOccupationStatus(int portIndex) {
     switch (portIndex) {
       case RouterUtils.NO_PORT_AVAILABLE_FLAG:
         System.out.println("\n\nNo free port available on current router at this time.\n\n");
@@ -129,7 +133,7 @@ public class Router {
           System.out.println(
               "\n\nError: cannot attach to invalid port at (index = " + portIndex + " ) \n\n");
           return true;
-        } else if (ports[portIndex] != null) {
+        } else if (this.ports[portIndex] != null) {
           System.out.println(
               "\n\nError: port is not free at (index = " + portIndex + " ) \n\n");
           return true;
@@ -161,7 +165,7 @@ public class Router {
     int indexOfFreePort = RouterUtils.findIndexOfFreePort(ports, remoteSimulatedIp);
 
     // return immediately if we were not able to find a valid port
-    if (checkAndAlertPortOccupationStatus(ports, indexOfFreePort)) {
+    if (checkAndAlertPortOccupationStatus(indexOfFreePort)) {
       return;
     }
 
@@ -213,11 +217,13 @@ public class Router {
         try {
           // let's attempt a connection
           clientSocket = new Socket(remoteProcessIp, remoteProcessPortNumber);
+          // IMPORTANT: must establish output stream first to enable input stream setup
           outToRemoteServer = new ObjectOutputStream(clientSocket.getOutputStream());
           inFromRemoteServer = new ObjectInputStream(clientSocket.getInputStream());
 
           // successfully connected, let's get our SospfPacket ready
-          helloBroadcastPacket = RouterUtils.creatSospfPacket(
+
+          helloBroadcastPacket = RouterUtils.createSospfPacket(
               this.rd.processIpAddress, this.rd.processPortNumber,
               this.rd.simulatedIpAddress, remoteProcessIp,
               SospfPacket.SOSPF_HELLO, null,
@@ -244,7 +250,7 @@ public class Router {
 
         try {
           // the moment of truth: handle the reply to our HELLO broadcast!
-          RouterUtils.handleHelloReplyAtClient(responsePacket, curLink);
+          RouterUtils.handleHelloReplyAtClient(curLink, responsePacket);
           // time to send the final HELLO packet at this link!
           outToRemoteServer.writeObject(helloBroadcastPacket);
         } catch (Exception e) {
@@ -281,10 +287,9 @@ public class Router {
    * Output the neighbors of the routers.
    */
   private void processNeighbors() {
-    // TODO: iterate over each non-null link in ports and print the neighbour IP for each
-    // clear some space four our upcoming console output
+    // clear some space for our upcoming console output
     System.out.println("\n\n");
-    // iterate over each link in our ports array
+    // iterate over each link in our ports array to identify each neighbour
     boolean foundAtLeastOneNeighbor = false;
     int curPortIndex = 0;
     for (Link curLink : ports) {
@@ -383,6 +388,9 @@ public class Router {
      */
     private void handleRequestpacket(SospfPacket inputRequestPacket) throws Exception {
       try {
+        if (inputRequestPacket == null) {
+          throw new Exception("Received null input request packet!");
+        }
         short packetType = inputRequestPacket.sospfType;
         switch (packetType) {
           case SospfPacket.SOSPF_NO_PORTS_AVAILABLE:
@@ -416,6 +424,11 @@ public class Router {
      */
     private void handleHelloRequest(SospfPacket inputRequestPacket) {
       try {
+        if (inputRequestPacket == null) {
+          throw new Exception("Received null input request packet!");
+        }
+
+        // ready client router properties
         String clientProcessIpAddress = inputRequestPacket.srcProcessIp;
         short clientProcessPortNumber = inputRequestPacket.srcProcessPort;
         String clientSimulatedIpAddress = inputRequestPacket.srcIp;
@@ -431,7 +444,7 @@ public class Router {
           case RouterUtils.NO_PORT_AVAILABLE_FLAG:
             System.out.println("\n\nNo free port available on current router at this time.\n\n");
             // if there is no free port, we'll notify the client and terminate
-            SospfPacket responsePacket = RouterUtils.creatSospfPacket(
+            SospfPacket responsePacket = RouterUtils.createSospfPacket(
                 rd.processIpAddress, rd.processPortNumber,
                 rd.simulatedIpAddress, clientSimulatedIpAddress,
                 SospfPacket.SOSPF_NO_PORTS_AVAILABLE, null,
@@ -458,14 +471,14 @@ public class Router {
         Link linkWithClient = ports[indexOfPort];
 
         // set the status of the client router to INIT
-        // TODO: do this even if link already exists?
+        // TODO: do this even if link already exists? (TA: "doesn't matter")
         linkWithClient.router2.status = RouterStatus.INIT;
 
         // ** ESSENTIAL PRINT STATEMENT FOR PA1 DELIVERABLE **
         System.out.println("\nset " + clientSimulatedIpAddress + " state to INIT;");
 
         // construct response packet (first HELLO reply)
-        SospfPacket replyToClient = RouterUtils.creatSospfPacket(
+        SospfPacket replyToClient = RouterUtils.createSospfPacket(
             rd.processIpAddress, rd.processPortNumber,
             rd.simulatedIpAddress, clientSimulatedIpAddress,
             SospfPacket.SOSPF_HELLO, null,
@@ -482,7 +495,7 @@ public class Router {
 
         try {
           // the moment of truth: handle the response packet!
-          RouterUtils.handleHelloReplyAtRemote(responseFromClient, linkWithClient);
+          RouterUtils.handleHelloReplyAtRemote(linkWithClient, responseFromClient);
         } catch (Exception e) {
           String alertMessageOfFailedResponseHandling =
               "\n\nError: Failed to handle client's final response over active connection "
@@ -509,7 +522,7 @@ public class Router {
     /**
      * Instantiate RequestHandlerJob to handle a single request on behalf of our input Router.
      */
-    public RequestHandlerJob(Socket activeSocket) {
+    RequestHandlerJob(Socket activeSocket) {
       this.activeSocket = activeSocket;
     }
 
@@ -567,7 +580,7 @@ public class Router {
     /**
      * Instantiate RouterServerJob to listen for incoming requests on behalf of input Router.
      */
-    public RouterServerJob(ServerSocket serverSocket) {
+    RouterServerJob(ServerSocket serverSocket) {
       this.serverSocket = serverSocket;
     }
 
@@ -580,6 +593,11 @@ public class Router {
         while (true) {
           // perform blocking wait to accept an incoming connection
           Socket activeSocket = serverSocket.accept();
+
+          if (activeSocket == null) {
+            // would represent a weird edge case for which we fail silently
+            continue;
+          }
 
           // reaching here means we have accepted an incoming message
           // let's create an active connection thread to handle the incoming data
