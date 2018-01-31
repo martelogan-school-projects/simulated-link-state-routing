@@ -61,7 +61,7 @@ License
 -------
 This code is under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.en.html).
 
-If you use or modify comp-535-networks-project, please credit the original authors as
+If you use or modify _comp-535-networks-project_, please credit the original authors as
 
 * Logan Martel - https://github.com/martelogan
 * Abdullah Abudan - https://github.com/aabudan
