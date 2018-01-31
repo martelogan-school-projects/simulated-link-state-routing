@@ -23,12 +23,12 @@ public class Router {
   /**
    * Int constant for initial attempt at port assignment.
    */
-  private static final short MIN_PROCESS_PORT_NUMBER = 20000;
+  static final short MIN_PROCESS_PORT_NUMBER = 20000;
 
   /**
    * Int constant for max value of attempted port assignment.
    */
-  private static final short MAX_PROCESS_PORT_NUMBER = Short.MAX_VALUE;
+  static final short MAX_PROCESS_PORT_NUMBER = Short.MAX_VALUE;
 
   /**
    * LSD instance for this router (captures state of this router's knowledge on LSA broadcasts).
@@ -107,6 +107,19 @@ public class Router {
   }
 
   /**
+   * Helper method to remove an attachment from the Link[] ports array.
+   */
+  void detachLinkAtPortIndex(int portIndex) {
+    if (RouterUtils.isPortIndexInvalid(portIndex)) {
+      throw new IllegalArgumentException(
+          "Port index '" + portIndex + "is invalid. Unable to detach link.");
+    } else {
+      ports[portIndex] = null;
+    }
+
+  }
+
+  /**
    * Disconnect with the router identified by the given destination ip address. Notice: this command
    * should trigger the synchronization of database
    *
@@ -117,9 +130,9 @@ public class Router {
   }
 
   /**
-   * Helper method to report if port is occupied in input Link[] array.
+   * Helper method to report if port is occupied in the Link[] ports array.
    */
-  public boolean checkAndAlertPortOccupationStatus(int portIndex) {
+  private boolean checkAndAlertPortOccupationStatus(int portIndex) {
     switch (portIndex) {
       case RouterUtils.NO_PORT_AVAILABLE_FLAG:
         System.out.println("\n\nNo free port available on current router at this time.\n\n");
@@ -129,7 +142,7 @@ public class Router {
         System.out.println("Please enter a valid remote IP address at which to attach.\n\n");
         return true;
       default:
-        if (portIndex < 0 || portIndex > Router.NUM_PORTS_PER_ROUTER) {
+        if (RouterUtils.isPortIndexInvalid(portIndex)) {
           System.out.println(
               "\n\nError: cannot attach to invalid port at (index = " + portIndex + " ) \n\n");
           return true;
@@ -154,11 +167,29 @@ public class Router {
   private void processAttach(String remoteProcessIp, short remoteProcessPort,
       String remoteSimulatedIp, short linkWeight) {
 
+    if (RouterUtils.isNullOrEmptyString(remoteProcessIp)) {
+      throw new IllegalArgumentException("Cannot attach to empty or null remote process IP.");
+    }
+
+    if (RouterUtils.isNullOrEmptyString(remoteSimulatedIp)) {
+      throw new IllegalArgumentException("Cannot attach to empty or null remote simulated IP.");
+    }
+
+    if (RouterUtils.isPortNumberInvalid(remoteProcessPort)) {
+      throw new IllegalArgumentException(
+          "Cannot attach to remote process with port number '"
+              + remoteProcessPort + "'.\nAll process ports in our network must fall in the range "
+              + MIN_PROCESS_PORT_NUMBER + " to " + MAX_PROCESS_PORT_NUMBER + "."
+      );
+    }
+
     // verify that we are not attempting self-attachment
-    if (remoteSimulatedIp.equals(this.rd.simulatedIpAddress)) {
-      System.out.println("\n\nError: cannot input IP of current router.");
-      System.out.println("Please enter a valid remote IP address at which to attach.\n\n");
-      return;
+    {
+      if (remoteSimulatedIp.equals(this.rd.simulatedIpAddress)) {
+        System.out.println("\n\nError: cannot input IP of current router.");
+        System.out.println("Please enter a valid remote IP address at which to attach.\n\n");
+        return;
+      }
     }
 
     // find free port at which to link remote router
@@ -190,6 +221,9 @@ public class Router {
    */
   private void processStart() {
 
+    // boolean to flag attempt at HELLO broadcast
+    boolean attemptedHelloBroadcast = false;
+
     // declare local variables reused over iterations
     RouterDescription remoteRouterDescription;
     String remoteProcessIp;
@@ -205,6 +239,9 @@ public class Router {
         // skip this port
         continue;
       }
+
+      // found a link!
+      attemptedHelloBroadcast = true;
 
       // let's prepare what we need to request a connection
       remoteRouterDescription = curLink.router2;
@@ -236,8 +273,8 @@ public class Router {
         } catch (Exception e) {
           String failedToConnectMessage =
               "\n\nError: Failed to send data to remote IP "
-                  + remoteRouterDescription.simulatedIpAddress + "\n\n";
-          RouterUtils.alertInterprocessException(e, failedToConnectMessage);
+                  + remoteRouterDescription.simulatedIpAddress;
+          RouterUtils.alertExceptionToConsole(e, failedToConnectMessage);
           // important to raise exception here to defer control flow & close connections
           throw e;
         }
@@ -250,24 +287,28 @@ public class Router {
 
         try {
           // the moment of truth: handle the reply to our HELLO broadcast!
-          RouterUtils.handleHelloReplyAtClient(curLink, responsePacket);
+          RouterUtils.handleHelloReplyAtClient(this, curLink, responsePacket);
           // time to send the final HELLO packet at this link!
           outToRemoteServer.writeObject(helloBroadcastPacket);
         } catch (Exception e) {
           String alertMessageOfFailedRequestHandling =
               "\n\nError: Failed to handle response over client connection at socket "
                   + clientSocket + " \n\n";
-          RouterUtils.alertInterprocessException(e, alertMessageOfFailedRequestHandling);
+          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedRequestHandling);
           // important to raise exception here to defer control flow
           throw e;
         }
       } catch (Exception e) {
         String alertMessageOfFailedHelloBroadcast =
             "\n\nError: Failed to broadcast hello for ( link = " + curLink + " ) \n\n";
-        RouterUtils.alertInterprocessException(e, alertMessageOfFailedHelloBroadcast);
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHelloBroadcast);
       } finally {
         RouterUtils.closeIoSocketConnection(clientSocket, inFromRemoteServer, outToRemoteServer);
       }
+    }
+
+    if (!attemptedHelloBroadcast) {
+      System.out.println("\n\nNo attached links for which to start HELLO broadcast.\n\n");
     }
   }
 
@@ -327,39 +368,54 @@ public class Router {
       BufferedReader br = new BufferedReader(isReader);
       System.out.print(">> ");
       String command = br.readLine();
-      while (true) {
-        if (command.startsWith("detect ")) {
-          String[] cmdLine = command.split(" ");
-          processDetect(cmdLine[1]);
-        } else if (command.startsWith("disconnect ")) {
-          String[] cmdLine = command.split(" ");
-          processDisconnect(Short.parseShort(cmdLine[1]));
-        } else if (command.startsWith("quit")) {
-          processQuit();
-        } else if (command.startsWith("attach ")) {
-          String[] cmdLine = command.split(" ");
-          processAttach(cmdLine[1], Short.parseShort(cmdLine[2]),
-              cmdLine[3], Short.parseShort(cmdLine[4]));
-        } else if (command.equals("start")) {
-          processStart();
-        } else if (command.equals("connect ")) {
-          String[] cmdLine = command.split(" ");
-          processConnect(cmdLine[1], Short.parseShort(cmdLine[2]),
-              cmdLine[3], Short.parseShort(cmdLine[4]));
-        } else if (command.equals("neighbors")) {
-          // output neighbors
-          processNeighbors();
-        } else {
-          // invalid command
-          break;
+      try {
+        while (true) {
+          try {
+            if (command.startsWith("detect")) {
+              String[] cmdLine = command.split(" ");
+              processDetect(cmdLine[1]);
+            } else if (command.startsWith("disconnect")) {
+              String[] cmdLine = command.split(" ");
+              processDisconnect(Short.parseShort(cmdLine[1]));
+            } else if (command.startsWith("quit")) {
+              processQuit();
+            } else if (command.startsWith("attach")) {
+              String[] cmdLine = command.split(" ");
+              processAttach(cmdLine[1], Short.parseShort(cmdLine[2]),
+                  cmdLine[3], Short.parseShort(cmdLine[4]));
+            } else if (command.equals("start")) {
+              processStart();
+            } else if (command.equals("connect")) {
+              String[] cmdLine = command.split(" ");
+              processConnect(cmdLine[1], Short.parseShort(cmdLine[2]),
+                  cmdLine[3], Short.parseShort(cmdLine[4]));
+            } else if (command.equals("neighbors")) {
+              // output neighbors
+              processNeighbors();
+            } else {
+              // invalid command
+              System.out.println("\n\nCommand '" + command + "' was not recognized.");
+              System.out.println("Please enter a valid command.\n\n");
+            }
+          } catch (Exception e) {
+            String alertMessageOfFailedCommandExecution =
+                "\n\nError: failed to execute user input '" + command + "'.";
+            RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedCommandExecution);
+          } finally {
+            System.out.print(">> ");
+            command = br.readLine();
+          }
         }
-        System.out.print(">> ");
-        command = br.readLine();
+      } catch (Exception e) {
+        // close streams before crashing terminal
+        isReader.close();
+        br.close();
+        throw e;
       }
-      isReader.close();
-      br.close();
     } catch (Exception e) {
-      e.printStackTrace();
+      String alertMessageOfFailedTerminal =
+          "\n\nError: router's terminal interface crashed.";
+      RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedTerminal);
     }
   }
 
@@ -413,7 +469,7 @@ public class Router {
         String alertMessageOfFailedRequestRouting =
             "\n\nError: Failed to route input request to appropriate sub-handler for packet "
                 + inputRequestPacket + " \n\n";
-        RouterUtils.alertInterprocessException(e, alertMessageOfFailedRequestRouting);
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedRequestRouting);
         // important to raise exception here to defer control flow & close connections
         throw e;
       }
@@ -454,6 +510,13 @@ public class Router {
             // ** terminate here! **
             return;
           case RouterUtils.DUPLICATE_ATTACHMENT_ATTEMPT_FLAG:
+            // ** critical assumption **
+            // act as usual on encountering duplicate attachment
+            System.out.println(
+                "\n(NOTE: Found existing attachment for client router at IP "
+                    + clientSimulatedIpAddress
+                    + ").\nWe shall proceed regardless with the HELLO conversation by design..."
+            );
             // the sender was already linked with one of our ports, let's get that index
             indexOfPort =
                 RouterUtils.findIndexOfPortAttachedTo(ports, clientSimulatedIpAddress);
@@ -471,7 +534,8 @@ public class Router {
         Link linkWithClient = ports[indexOfPort];
 
         // set the status of the client router to INIT
-        // TODO: do this even if link already exists? (TA: "doesn't matter")
+        // ** critical assumption **
+        // do this even if link already exists
         linkWithClient.router2.status = RouterStatus.INIT;
 
         // ** ESSENTIAL PRINT STATEMENT FOR PA1 DELIVERABLE **
@@ -500,7 +564,7 @@ public class Router {
           String alertMessageOfFailedResponseHandling =
               "\n\nError: Failed to handle client's final response over active connection "
                   + "at socket " + activeSocket + " \n\n";
-          RouterUtils.alertInterprocessException(e, alertMessageOfFailedResponseHandling);
+          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedResponseHandling);
           // important to raise exception here to defer control flow
           throw e;
         }
@@ -508,7 +572,7 @@ public class Router {
         String alertMessageOfFailedHelloHandling =
             "\n\nError: Failed to handle HELLO request for packet "
                 + inputRequestPacket + " \n\n";
-        RouterUtils.alertInterprocessException(e, alertMessageOfFailedHelloHandling);
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHelloHandling);
       }
     }
 
@@ -538,7 +602,7 @@ public class Router {
           String alertMessageOfFailedConnectionAttempt =
               "\n\nError: Failed to establish connection to handle request at socket "
                   + activeSocket + " \n\n";
-          RouterUtils.alertInterprocessException(e, alertMessageOfFailedConnectionAttempt);
+          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedConnectionAttempt);
           // important to raise exception here to defer control flow & close connections
           throw e;
         }
@@ -552,7 +616,7 @@ public class Router {
           String alertMessageOfFailedRequestHandling =
               "\n\nError: Failed to handle request of active connection at socket "
                   + activeSocket + " \n\n";
-          RouterUtils.alertInterprocessException(e, alertMessageOfFailedRequestHandling);
+          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedRequestHandling);
           // important to raise exception here to defer control flow & close connections
           throw e;
         }
@@ -560,7 +624,7 @@ public class Router {
         String alertMessageOfCrashedRequestHandlerJob =
             "\n\nError: RequestHandlerJob crashed for active connection at socket "
                 + activeSocket + " \n\n";
-        RouterUtils.alertInterprocessException(e, alertMessageOfCrashedRequestHandlerJob);
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfCrashedRequestHandlerJob);
       } finally {
         RouterUtils.closeIoSocketConnection(activeSocket, inFromRemoteServer, outToRemoteServer);
       }
@@ -608,7 +672,7 @@ public class Router {
       } catch (Exception e) {
         String jobCrashedMessage =
             "\n\nRouterServerJob crashed for router IP " + rd.simulatedIpAddress + " \n\n";
-        RouterUtils.alertInterprocessException(e, jobCrashedMessage);
+        RouterUtils.alertExceptionToConsole(e, jobCrashedMessage);
       }
     }
   }

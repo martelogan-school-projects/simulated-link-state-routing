@@ -62,6 +62,13 @@ final class RouterUtils {
   }
 
   /**
+   * Static method to verify non-nullity and non-emptiness of an input string.
+   */
+  static boolean isNullOrEmptyString(String inputString) {
+    return inputString == null || inputString.trim().length() <= 0;
+  }
+
+  /**
    * Static method to verify Link[] ports array and target IP address input combination.
    */
   private static void verifyPortsAndTargetIpNotNull(Link[] ports, String simulatedIpOfTarget) {
@@ -71,6 +78,21 @@ final class RouterUtils {
     if (simulatedIpOfTarget == null) {
       throw new IllegalArgumentException("Cannot establish link with null target IP!");
     }
+  }
+
+  /**
+   * Static boolean helper method to check validity of port index.
+   */
+  static boolean isPortIndexInvalid(int portIndex) {
+    return portIndex < 0 || portIndex > Router.NUM_PORTS_PER_ROUTER;
+  }
+
+  /**
+   * Static boolean helper method to check validity of actual process port number.
+   */
+  static boolean isPortNumberInvalid(int portNumber) {
+    return portNumber < Router.MIN_PROCESS_PORT_NUMBER
+        || portNumber > Router.MAX_PROCESS_PORT_NUMBER;
   }
 
   /**
@@ -121,7 +143,7 @@ final class RouterUtils {
   /**
    * Close client-server I/O socket connection.
    */
-  static boolean closeIoSocketConnection(
+  static void closeIoSocketConnection(
       Socket ioSocket, ObjectInputStream inFromServer, ObjectOutputStream outToServer) {
     try {
       if (inFromServer != null) {
@@ -134,24 +156,22 @@ final class RouterUtils {
       if (ioSocket != null) {
         ioSocket.close();
       }
-      return true;
     } catch (Exception e) {
       System.out.println(
           "\n\nError: Failed to correctly close connection for socket: "
               + ioSocket + "\n\n");
       e.printStackTrace();
       System.out.println("\n\n");
-      return false;
     }
   }
 
   /**
-   * Static method to format output of process-process communication exception.
+   * Static method to pretty print exception alert to console.
    */
-  static void alertInterprocessException(Exception e, String customMessage) {
+  static void alertExceptionToConsole(Exception e, String customMessage) {
     System.out.println(customMessage);
     System.out.println("\n\nFailed with Exception: \n\n");
-    e.printStackTrace();
+    e.printStackTrace(System.out);
     System.out.println("\n\n");
   }
 
@@ -159,10 +179,13 @@ final class RouterUtils {
    * Static method to alert response that no ports are available at remote.
    */
   private static void alertNoPortsAvailableAtRemote(SospfPacket responsePacket) {
+    String remoteRouterIp = responsePacket.srcIp;
     String alertMessageOfNoPortsAvailableAtTargetRouter =
-        "\n\n Error: Received response that no ports are available to establish a "
+        "\n\nError: Received response that no ports are available to establish a "
             + "connection at remote with (SimulatedIP = "
-            + responsePacket.srcIp + " ) \n\n";
+            + remoteRouterIp + " )";
+    alertMessageOfNoPortsAvailableAtTargetRouter +=
+        "\nLocally disconnecting the router's attachment link...\n\n";
     System.out.println(alertMessageOfNoPortsAvailableAtTargetRouter);
   }
 
@@ -208,7 +231,7 @@ final class RouterUtils {
       String alertMessageOfFailedInputStreamParsing =
           "\n\nError: Failed to parse input stream to SospfPacket at socket '"
               + activeSocket + "' \n\n";
-      RouterUtils.alertInterprocessException(e, alertMessageOfFailedInputStreamParsing);
+      RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedInputStreamParsing);
       // important to raise exception here to defer control flow & close connections
       throw e;
     }
@@ -244,15 +267,22 @@ final class RouterUtils {
   /**
    * Static helper method to route and handle reply to HELLO broadcast at client.
    */
-  static void handleHelloReplyAtClient(Link curLink, SospfPacket responsePacket)
-      throws Exception {
+  static void handleHelloReplyAtClient(Router clientRouter,
+      Link curLink, SospfPacket responsePacket) throws Exception {
     // verify input arguments
+    if (clientRouter == null) {
+      throw new IllegalArgumentException("Trying to handle reply at null client router!");
+    }
     verifyLinkAndPacketNotNull(curLink, responsePacket);
     // handle response depending on SOSPF status
     short packetType = responsePacket.sospfType;
     switch (packetType) {
       case SospfPacket.SOSPF_NO_PORTS_AVAILABLE:
-        //TODO: should we also disconnect the attachment locally here? (TA: "doesn't matter")
+        // ** critical assumption **
+        // disconnect the attachment locally
+        int portIndex =
+            RouterUtils.findIndexOfPortAttachedTo(clientRouter.ports, responsePacket.srcIp);
+        clientRouter.detachLinkAtPortIndex(portIndex);
         RouterUtils.alertNoPortsAvailableAtRemote(responsePacket);
         break;
       case SospfPacket.SOSPF_HELLO:
@@ -304,5 +334,4 @@ final class RouterUtils {
         RouterUtils.raiseUnknownResponseException(packetType);
     }
   }
-
 }
