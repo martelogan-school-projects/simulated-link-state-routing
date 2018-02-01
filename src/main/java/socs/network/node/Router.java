@@ -7,8 +7,10 @@ import java.io.ObjectOutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import socs.network.message.LinkStateAdvertisement;
 import socs.network.message.SospfPacket;
-import socs.network.net_utils.RouterConfiguration;
+import socs.network.utils.CommonUtils;
+import socs.network.utils.RouterConfiguration;
 
 /**
  * Encapsulating class for a router (ie. single node) in our network.
@@ -33,12 +35,12 @@ public class Router {
   /**
    * LSD instance for this router (captures state of this router's knowledge on LSA broadcasts).
    */
-  protected LinkStateDatabase lsd;
+  private LinkStateDatabase lsd;
 
   /**
    * Description summarizing state of this router (ie. single node) in our network.
    */
-  RouterDescription rd = new RouterDescription();
+  private final RouterDescription rd;
 
   /**
    * Fixed-size array maintaining state of ports exposed to link with other routers in our network.
@@ -55,19 +57,20 @@ public class Router {
     }
 
     // assign simulated IP address from config file
-    rd.simulatedIpAddress = config.getSimulatedIpAddress();
+    String simulatedIpAddress = config.getSimulatedIpAddress();
 
     // attempt to set process IP address to localhost (fail fast if unsuccessful)
-    rd.processIpAddress = InetAddress.getLocalHost().getHostAddress();
+    String processIpAddress = InetAddress.getLocalHost().getHostAddress();
 
     ServerSocket serverSocket = null;
+    short processPortNumber = RouterDescription.INVALID_PORT_NUMBER;
     short curPortNumber = MIN_PROCESS_PORT_NUMBER;
     // seek available port at which to assign a ServerSocket
     while (serverSocket == null) {
       try {
         // attempt setting socket at this port number
         serverSocket = new ServerSocket(curPortNumber);
-        rd.processPortNumber = curPortNumber;
+        processPortNumber = curPortNumber;
         // on success, let's start a background listener for our router
         RouterServerJob serverJob = new RouterServerJob(serverSocket);
         Thread serverJobThread = new Thread(serverJob);
@@ -82,6 +85,10 @@ public class Router {
         }
       }
     }
+
+    // instantiate our router description (will raise exception on any invalid params)
+    this.rd = new RouterDescription(processIpAddress, processPortNumber, simulatedIpAddress,
+        RouterStatus.UNKNOWN, RouterDescription.TRANSMISSION_WEIGHT_TO_SELF);
 
     // surviving the above, let's instantiate an LSD for our Router
     lsd = new LinkStateDatabase(rd);
@@ -167,11 +174,11 @@ public class Router {
   private void processAttach(String remoteProcessIp, short remoteProcessPort,
       String remoteSimulatedIp, short linkWeight) {
 
-    if (RouterUtils.isNullOrEmptyString(remoteProcessIp)) {
+    if (CommonUtils.isNullOrEmptyString(remoteProcessIp)) {
       throw new IllegalArgumentException("Cannot attach to empty or null remote process IP.");
     }
 
-    if (RouterUtils.isNullOrEmptyString(remoteSimulatedIp)) {
+    if (CommonUtils.isNullOrEmptyString(remoteSimulatedIp)) {
       throw new IllegalArgumentException("Cannot attach to empty or null remote simulated IP.");
     }
 
@@ -201,8 +208,8 @@ public class Router {
     }
 
     // a port was available, let's create a description for our remote router
-    RouterDescription remoteRouterDescription =
-        RouterUtils.createRouterDescription(remoteProcessIp, remoteProcessPort, remoteSimulatedIp);
+    RouterDescription remoteRouterDescription = new RouterDescription(remoteProcessIp,
+        remoteProcessPort, remoteSimulatedIp, RouterStatus.UNKNOWN, linkWeight);
 
     // attach the link to the free port of our array
     ports[indexOfFreePort] = new Link(this.rd, remoteRouterDescription);
@@ -228,6 +235,7 @@ public class Router {
     RouterDescription remoteRouterDescription;
     String remoteProcessIp;
     short remoteProcessPortNumber;
+    short curLinkWeight;
     Socket clientSocket = null;
     ObjectInputStream inFromRemoteServer = null;
     ObjectOutputStream outToRemoteServer = null;
@@ -244,9 +252,10 @@ public class Router {
       attemptedHelloBroadcast = true;
 
       // let's prepare what we need to request a connection
-      remoteRouterDescription = curLink.router2;
+      remoteRouterDescription = curLink.targetRouter;
       remoteProcessIp = remoteRouterDescription.processIpAddress;
       remoteProcessPortNumber = remoteRouterDescription.processPortNumber;
+      curLinkWeight = curLink.weight;
 
       SospfPacket helloBroadcastPacket = null;
 
@@ -260,11 +269,9 @@ public class Router {
 
           // successfully connected, let's get our SospfPacket ready
 
-          helloBroadcastPacket = RouterUtils.createSospfPacket(
-              this.rd.processIpAddress, this.rd.processPortNumber,
-              this.rd.simulatedIpAddress, remoteProcessIp,
-              SospfPacket.SOSPF_HELLO, null,
-              this.rd.simulatedIpAddress, null
+          helloBroadcastPacket = RouterUtils.buildSospfPacketFromRouterDescriptions(
+              this.rd, remoteRouterDescription,
+              SospfPacket.SOSPF_HELLO, null, curLinkWeight
           );
 
           // time to send our HELLO packet!
@@ -331,19 +338,27 @@ public class Router {
     // clear some space for our upcoming console output
     System.out.println("\n\n");
     // iterate over each link in our ports array to identify each neighbour
-    boolean foundAtLeastOneNeighbor = false;
+    boolean foundAtLeastOneAttached = false;
     int curPortIndex = 0;
     for (Link curLink : ports) {
       if (curLink != null) {
         // found a neighbor: output this to the console
-        foundAtLeastOneNeighbor = true;
-        System.out.println(
-            "IP Address of the neighbour linked at outbound port index "
-                + curPortIndex + " is: " + curLink.router2.simulatedIpAddress + "\n");
+        foundAtLeastOneAttached = true;
+        RouterDescription remoteRouterDescription = curLink.targetRouter;
+        if (remoteRouterDescription.status == RouterStatus.TWO_WAY) {
+          System.out.println(
+              "The IP Address of the TWO_WAY neighbour linked at outbound port index "
+                  + curPortIndex + " is: " + curLink.targetRouter.simulatedIpAddress + "\n");
+        } else {
+          System.out.println(
+              "An attached router (lacking TWO_WAY status) is attached at outbound port index "
+                  + curPortIndex + " with IP address: "
+                  + curLink.targetRouter.simulatedIpAddress + "\n");
+        }
       }
       curPortIndex += 1;
     }
-    if (!foundAtLeastOneNeighbor) {
+    if (!foundAtLeastOneAttached) {
       // no neighboring routers attached to Link[] ports array
       System.out.println(
           "No neighbouring routers are currently linked to our outbound ports.\n");
@@ -357,6 +372,20 @@ public class Router {
 
   private void processQuit() {
 
+  }
+
+  /**
+   * Getter for the simulated IP address for this router.
+   */
+  String getSimulatedIpAddress() {
+    return this.rd.simulatedIpAddress;
+  }
+
+  /**
+   * Getter for last stored LSA of this router.
+   */
+  LinkStateAdvertisement getLastLinkStateAdvertisement() {
+    return this.lsd.getLastLinkStateAdvertisement(this.rd.simulatedIpAddress);
   }
 
   /**
@@ -488,6 +517,7 @@ public class Router {
         String clientProcessIpAddress = inputRequestPacket.srcProcessIp;
         short clientProcessPortNumber = inputRequestPacket.srcProcessPort;
         String clientSimulatedIpAddress = inputRequestPacket.srcIp;
+        short weightOfTransmission = inputRequestPacket.weightOfTransmission;
 
         // ** ESSENTIAL PRINT STATEMENT FOR PA1 DELIVERABLE **
         System.out.println("\n\nreceived HELLO from " + clientSimulatedIpAddress + ";");
@@ -500,11 +530,10 @@ public class Router {
           case RouterUtils.NO_PORT_AVAILABLE_FLAG:
             System.out.println("\n\nNo free port available on current router at this time.\n\n");
             // if there is no free port, we'll notify the client and terminate
-            SospfPacket responsePacket = RouterUtils.createSospfPacket(
-                rd.processIpAddress, rd.processPortNumber,
-                rd.simulatedIpAddress, clientSimulatedIpAddress,
-                SospfPacket.SOSPF_NO_PORTS_AVAILABLE, null,
-                rd.simulatedIpAddress, null
+            SospfPacket responsePacket = new SospfPacket(
+                rd.processIpAddress, rd.processPortNumber, rd.simulatedIpAddress,
+                clientSimulatedIpAddress, SospfPacket.SOSPF_NO_PORTS_AVAILABLE,
+                rd.simulatedIpAddress, rd.simulatedIpAddress, null, weightOfTransmission
             );
             outToRemoteServer.writeObject(responsePacket);
             // ** terminate here! **
@@ -524,8 +553,10 @@ public class Router {
           default:
             // first time we've seen the client router: let's create a description for it
             RouterDescription clientDescription =
-                RouterUtils.createRouterDescription(
-                    clientProcessIpAddress, clientProcessPortNumber, clientSimulatedIpAddress
+                new RouterDescription(
+                    clientProcessIpAddress, clientProcessPortNumber,
+                    clientSimulatedIpAddress, RouterStatus.UNKNOWN,
+                    weightOfTransmission
                 );
             // finally: we attach (for the first time) to the client here
             ports[indexOfPort] = new Link(rd, clientDescription);
@@ -536,17 +567,18 @@ public class Router {
         // set the status of the client router to INIT
         // ** critical assumption **
         // do this even if link already exists
-        linkWithClient.router2.status = RouterStatus.INIT;
+        linkWithClient.targetRouter.status = RouterStatus.INIT;
+        // to be safe, we'll also set our status at the same time...
+        linkWithClient.originRouter.status = RouterStatus.INIT;
 
         // ** ESSENTIAL PRINT STATEMENT FOR PA1 DELIVERABLE **
         System.out.println("\nset " + clientSimulatedIpAddress + " state to INIT;");
 
         // construct response packet (first HELLO reply)
-        SospfPacket replyToClient = RouterUtils.createSospfPacket(
-            rd.processIpAddress, rd.processPortNumber,
-            rd.simulatedIpAddress, clientSimulatedIpAddress,
-            SospfPacket.SOSPF_HELLO, null,
-            rd.simulatedIpAddress, null
+        SospfPacket replyToClient = new SospfPacket(
+            rd.processIpAddress, rd.processPortNumber, rd.simulatedIpAddress,
+            clientSimulatedIpAddress, SospfPacket.SOSPF_HELLO,
+            rd.simulatedIpAddress, rd.simulatedIpAddress, null, weightOfTransmission
         );
 
         // send response packet to client

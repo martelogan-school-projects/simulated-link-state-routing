@@ -1,6 +1,7 @@
 package socs.network.node;
 
 import java.util.HashMap;
+import java.util.LinkedList;
 import socs.network.message.LinkDescription;
 import socs.network.message.LinkStateAdvertisement;
 
@@ -12,7 +13,7 @@ public class LinkStateDatabase {
   /**
    * Data store to map linkID (ie. simulated IP) => LinkStateAdvertisement instance.
    */
-  HashMap<String, LinkStateAdvertisement> dataStore = new HashMap<String, LinkStateAdvertisement>();
+  private HashMap<String, LinkStateAdvertisement> dataStore;
 
   /**
    * Private description for the router maintaining this Link State Database.
@@ -23,24 +24,41 @@ public class LinkStateDatabase {
    * Initialize database with single entry for this router.
    */
   private LinkStateAdvertisement initLinkStateDatabase() {
-    LinkStateAdvertisement lsa = new LinkStateAdvertisement();
-    lsa.linkStateId = rd.simulatedIpAddress;
-    lsa.lsaSeqNumber = Integer.MIN_VALUE;
-    LinkDescription ld = new LinkDescription();
-    ld.linkId = rd.simulatedIpAddress;
-    ld.processPortNum = -1;
-    ld.tosMetrics = 0;
-    lsa.links.add(ld);
-    return lsa;
+    // TODO: here, originally: (portNum, tosMetrics) = (-1, 0) - worth verifying my change later
+    LinkDescription linkDescriptionOfActiveRouter = new LinkDescription(
+        rd.simulatedIpAddress,
+        rd.processPortNumber,
+        RouterDescription.TRANSMISSION_WEIGHT_TO_SELF
+    );
+    LinkedList<LinkDescription> linkedListOfLinkDescriptions = new LinkedList<LinkDescription>();
+    linkedListOfLinkDescriptions.add(linkDescriptionOfActiveRouter);
+    // TODO: originally, NO_PREV_ADVERT constant was just INT.MIN_VAL - careful with this
+    return new LinkStateAdvertisement(
+        rd.simulatedIpAddress,
+        LinkStateAdvertisement.NO_PREVIOUS_ADVERTISEMENTS_FLAG,
+        linkedListOfLinkDescriptions
+    );
   }
 
   /**
    * Construct LinkStateDatabase based on routerDescription instance.
    */
-  public LinkStateDatabase(RouterDescription routerDescription) {
+  LinkStateDatabase(RouterDescription routerDescription) {
+    if (routerDescription == null) {
+      throw new IllegalArgumentException(
+          "Cannot instantiate LinkStateDatabase with null initial RouterDescription");
+    }
     rd = routerDescription;
-    LinkStateAdvertisement l = initLinkStateDatabase();
-    dataStore.put(l.linkStateId, l);
+    LinkStateAdvertisement initialLsaRecord = initLinkStateDatabase();
+    dataStore = new HashMap<String, LinkStateAdvertisement>();
+    dataStore.put(initialLsaRecord.linkStateId, initialLsaRecord);
+  }
+
+  /**
+   * Getter of last stored LSA for a given input IP address.
+   */
+  LinkStateAdvertisement getLastLinkStateAdvertisement(String simulatedIpAddress) {
+    return dataStore.get(simulatedIpAddress);
   }
 
   /**
@@ -66,5 +84,4 @@ public class LinkStateDatabase {
     }
     return sb.toString();
   }
-
 }

@@ -3,7 +3,9 @@ package socs.network.node;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
+import java.util.LinkedList;
 import java.util.Vector;
+import socs.network.message.LinkDescription;
 import socs.network.message.LinkStateAdvertisement;
 import socs.network.message.SospfPacket;
 
@@ -29,43 +31,89 @@ final class RouterUtils {
   }
 
   /**
-   * Static helper method to create a RouterDescription via input params.
+   * Static method to instantiate Sospf Packet via router descriptions.
    */
-  static RouterDescription createRouterDescription(String processIp,
-      short processPortNumber, String simulatedIp) {
-    RouterDescription rd = new RouterDescription();
-    rd.processIpAddress = processIp;
-    rd.processPortNumber = processPortNumber;
-    rd.simulatedIpAddress = simulatedIp;
-    rd.status = RouterStatus.UNKNOWN;
-    return rd;
+  static SospfPacket buildSospfPacketFromRouterDescriptions(
+      RouterDescription srcRouter, RouterDescription destRouter, short sospfType,
+      Vector<LinkStateAdvertisement> lsaArray, short weightOfTransmission) {
+    // FIXME: is below the intended use case of neighbor and router id?
+    String srcSimulatedIpAndNeighbourIdAndRouterId = srcRouter.simulatedIpAddress;
+    return new SospfPacket(
+        srcRouter.processIpAddress, srcRouter.processPortNumber,
+        srcSimulatedIpAndNeighbourIdAndRouterId, destRouter.simulatedIpAddress,
+        sospfType, srcSimulatedIpAndNeighbourIdAndRouterId, srcSimulatedIpAndNeighbourIdAndRouterId,
+        lsaArray, weightOfTransmission
+
+    );
   }
 
   /**
-   * Static helper method to create a SospfPacket via input params.
+   * Static helper method to construct LinkedList of LinkDescriptions from advertiser's Link[] ports
+   * array.
    */
-  static SospfPacket createSospfPacket(
-      String srcProcessIp, short srcProcessPort,
-      String srcSimulatedIp, String destSimulatedIp,
-      short sospfType, String routerId,
-      String neighborId, Vector<LinkStateAdvertisement> lsaArray) {
-    SospfPacket packet = new SospfPacket();
-    packet.srcProcessIp = srcProcessIp;
-    packet.srcProcessPort = srcProcessPort;
-    packet.srcIp = srcSimulatedIp;
-    packet.dstIp = destSimulatedIp;
-    packet.sospfType = sospfType;
-    packet.routerId = routerId;
-    packet.neighborId = neighborId;
-    packet.lsaArray = lsaArray;
-    return packet;
+  static LinkedList<LinkDescription> getListOfLinkDescriptions(Link[] ports) {
+    LinkedList<LinkDescription> linkedListOfLinkDescriptions = new LinkedList<LinkDescription>();
+    for (Link curLink : ports) {
+      // skip any null links
+      if (curLink == null) {
+        continue;
+      }
+
+      // prepare some details about the remote router
+      RouterDescription remoteRouterDescription = curLink.targetRouter;
+      RouterStatus remoteRouterStatus = remoteRouterDescription.status;
+      // skip any links with an unclear router status
+      if (remoteRouterStatus == null || remoteRouterStatus == RouterStatus.UNKNOWN) {
+        continue;
+      }
+
+      // create the link description to summarize this connection
+      LinkDescription linkDescription = new LinkDescription(
+          remoteRouterDescription.simulatedIpAddress,
+          remoteRouterDescription.processPortNumber,
+          curLink.weight
+      );
+
+      // add the linkDescription to our running list
+      linkedListOfLinkDescriptions.add(linkDescription);
+    }
+
+    return linkedListOfLinkDescriptions;
   }
 
   /**
-   * Static method to verify non-nullity and non-emptiness of an input string.
+   * Static helper method to create a LinkStateAdvertisement for the input router.
    */
-  static boolean isNullOrEmptyString(String inputString) {
-    return inputString == null || inputString.trim().length() <= 0;
+  static LinkStateAdvertisement createLinkStateAdvertisement(Router advertisingRouter)
+      throws Exception {
+
+    // set link state id to the advertising router's simulated IP address
+    String linkStateId = advertisingRouter.getSimulatedIpAddress();
+
+    // retrieve the advertiser's last LSA from its link state database
+    LinkStateAdvertisement lastLsa = advertisingRouter.getLastLinkStateAdvertisement();
+
+    if (lastLsa == null) {
+      throw new Exception(
+          "Router should have a sentinel LSA in the database before calling this method."
+      );
+    }
+
+    int prevSeqNumber = lastLsa.lsaSeqNumber;
+    int newSeqNumber;
+    // there was a prior link state advertisement by this router
+    if (prevSeqNumber == LinkStateAdvertisement.NO_PREVIOUS_ADVERTISEMENTS_FLAG) {
+      // this link state advertisement is the advertiser's first
+      newSeqNumber = LinkStateAdvertisement.MIN_SEQ_NUMBER;
+    } else {
+      // increment the LSA's sequence number
+      newSeqNumber = prevSeqNumber + 1;
+    }
+
+    // construct LinkedList of LinkDescriptions from advertiser's Link[] ports array
+    LinkedList<LinkDescription> newLinks = getListOfLinkDescriptions(advertisingRouter.ports);
+
+    return new LinkStateAdvertisement(linkStateId, newSeqNumber, newLinks);
   }
 
   /**
@@ -112,7 +160,7 @@ final class RouterUtils {
           // only set this if we hadn't already found a free port (prefers lowest index first)
           indexOfFreePort = curIndex;
         }
-      } else if (curLink.router2.simulatedIpAddress.equals(simulatedIpOfTarget)) {
+      } else if (curLink.targetRouter.simulatedIpAddress.equals(simulatedIpOfTarget)) {
         // return immediately to flag duplicate attachment attempt
         return DUPLICATE_ATTACHMENT_ATTEMPT_FLAG;
       }
@@ -132,7 +180,7 @@ final class RouterUtils {
     for (curIndex = 0; curIndex < Router.NUM_PORTS_PER_ROUTER; curIndex++) {
       Link curLink = ports[curIndex];
       if (ports[curIndex] != null
-          && curLink.router2.simulatedIpAddress.equals(simulatedIpOfTarget)) {
+          && curLink.targetRouter.simulatedIpAddress.equals(simulatedIpOfTarget)) {
         // found the port linked to the simulated IP address of our target router
         return curIndex;
       }
@@ -259,7 +307,9 @@ final class RouterUtils {
     String remotedSimulatedIpAddress = responsePacket.srcIp;
     System.out.println("\nreceived HELLO from " + remotedSimulatedIpAddress + ";");
     // importantly, we can now finally set remote RouterStatus to TWO_WAY
-    curLink.router2.status = RouterStatus.TWO_WAY;
+    curLink.targetRouter.status = RouterStatus.TWO_WAY;
+    // to be safe, we'll also set our status at the same time...
+    curLink.originRouter.status = RouterStatus.INIT;
     // ** ESSENTIAL PRINT STATEMENT FOR PA1 DELIVERABLE **
     System.out.println("\nset " + remotedSimulatedIpAddress + " state to TWO_WAY;\n");
   }
@@ -306,7 +356,9 @@ final class RouterUtils {
     String remotedSimulatedIpAddress = responsePacket.srcIp;
     System.out.println("\nreceived HELLO from " + remotedSimulatedIpAddress + ";");
     // importantly, we can now finally set remote RouterStatus to TWO_WAY
-    curLink.router2.status = RouterStatus.TWO_WAY;
+    curLink.targetRouter.status = RouterStatus.TWO_WAY;
+    // to be safe, we'll also set our status at the same time...
+    curLink.originRouter.status = RouterStatus.TWO_WAY;
     // ** ESSENTIAL PRINT STATEMENT FOR PA1 DELIVERABLE **
     System.out.println("\nset " + remotedSimulatedIpAddress + " state to TWO_WAY;\n");
     // add the prompt back

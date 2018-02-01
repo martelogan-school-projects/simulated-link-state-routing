@@ -1,11 +1,13 @@
-package socs.network.net_utils;
+package socs.network.utils;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import com.typesafe.config.ConfigValueFactory;
 import java.io.File;
 
-
+/**
+ * Configuration class to wrap state of Router setup.
+ */
 public class RouterConfiguration {
 
   /**

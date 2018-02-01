@@ -1,8 +1,11 @@
 package socs.network;
 
-import socs.network.net_utils.RouterConfiguration;
 import socs.network.node.Router;
+import socs.network.utils.RouterConfiguration;
 
+/**
+ * Standard 'Main' class for command-line execution.
+ */
 public class Main {
 
   /**
