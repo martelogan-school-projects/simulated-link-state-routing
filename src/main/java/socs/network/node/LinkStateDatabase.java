@@ -2,8 +2,10 @@ package socs.network.node;
 
 import java.util.HashMap;
 import java.util.LinkedList;
+import java.util.Vector;
 import socs.network.message.LinkDescription;
 import socs.network.message.LinkStateAdvertisement;
+import socs.network.utils.CommonUtils;
 
 /**
  * Encapsulating class to maintain data on LSA's broadcasted by the routers.
@@ -55,10 +57,39 @@ public class LinkStateDatabase {
   }
 
   /**
-   * Getter of last stored LSA for a given input IP address.
+   * Synchronized helper method to construct & return vector of database values.
    */
-  LinkStateAdvertisement getLastLinkStateAdvertisement(String simulatedIpAddress) {
+  synchronized Vector<LinkStateAdvertisement> getValuesVector() {
+    Vector<LinkStateAdvertisement> lsaArray = new Vector<LinkStateAdvertisement>();
+    lsaArray.addAll(dataStore.values());
+    return lsaArray;
+  }
+
+  /**
+   * Synchronized reader of last stored LSA for a given input IP address.
+   */
+  synchronized LinkStateAdvertisement getLastLinkStateAdvertisement(String simulatedIpAddress) {
+    if (CommonUtils.isNullOrEmptyString(simulatedIpAddress)) {
+      throw new IllegalArgumentException("Cannot get LSA for null IP address string.");
+    }
     return dataStore.get(simulatedIpAddress);
+  }
+
+  /**
+   * Synchronized writer of LSA for a given IP address key.
+   */
+  synchronized void putLinkStateAdvertisement(String linkId,
+      LinkStateAdvertisement linkStateAdvertisement) {
+    if (CommonUtils.isNullOrEmptyString(linkId)) {
+      throw new IllegalArgumentException("Cannot store LSA for null IP address string.");
+    }
+    if (linkStateAdvertisement == null) {
+      throw new IllegalArgumentException("Cannot store null LSA to Link State Database.");
+    }
+    if (!linkId.equals(linkStateAdvertisement.linkStateId)) {
+      throw new IllegalArgumentException("Input linkId key must equal LSA's linkId.");
+    }
+    dataStore.put(linkId, linkStateAdvertisement);
   }
 
   /**

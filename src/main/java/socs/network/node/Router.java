@@ -7,6 +7,9 @@ import java.io.ObjectOutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.LinkedList;
+import java.util.Vector;
+import socs.network.message.LinkDescription;
 import socs.network.message.LinkStateAdvertisement;
 import socs.network.message.SospfPacket;
 import socs.network.utils.CommonUtils;
@@ -224,6 +227,80 @@ public class Router {
   }
 
   /**
+   * Helper method to broadcast an LSAUPDATE to all neighbors in our Link[] ports array.
+   */
+  private void broadcastLsaUpdateToAllNeighbors() {
+    // simply pass in a null excludedRemoteIp so that no IP's are ignored
+    broadcastLsaUpdateWithExcludedRemote(null);
+  }
+
+  /**
+   * Helper method to broadcast an LSAUPDATE to all neighbors in our Link[] ports array (save
+   * perhaps for an excluded, non-null, input IP address).
+   */
+  private void broadcastLsaUpdateWithExcludedRemote(String excludedRemoteIp) {
+
+    // declare local variables reused over iterations
+    RouterDescription remoteRouterDescription;
+    String remoteProcessIp;
+    short remoteProcessPortNumber;
+    Socket clientSocket = null;
+    ObjectOutputStream outToRemoteServer = null;
+
+    try {
+      SospfPacket lsaUpdatePacket;
+      for (Link curLink : ports) {
+        // let's prepare what we need to request a connection
+        remoteRouterDescription = curLink.targetRouter;
+        remoteProcessIp = remoteRouterDescription.processIpAddress;
+        remoteProcessPortNumber = remoteRouterDescription.processPortNumber;
+
+        // skip this link if it is equal to a provided exclusion IP
+        if (excludedRemoteIp != null
+            && remoteRouterDescription.simulatedIpAddress.equals(excludedRemoteIp)) {
+          continue;
+        }
+
+        try {
+          // let's attempt a connection
+          clientSocket = new Socket(remoteProcessIp, remoteProcessPortNumber);
+          outToRemoteServer = new ObjectOutputStream(clientSocket.getOutputStream());
+
+          // ** successful connection **
+          // ** time to prepare our lsaUpdatePacket **
+
+          // first, get the state of our lsd as a vector of the database values
+          Vector<LinkStateAdvertisement> lsaArray = lsd.getValuesVector();
+
+          // from this, we can construct our lsaUpdatePacket
+          lsaUpdatePacket = RouterUtils.buildSospfPacketFromRouterDescriptions(
+              this.rd, remoteRouterDescription,
+              SospfPacket.SOSPF_LSAUPDATE, lsaArray, SospfPacket.IRRELEVANT_TRANSMISSION_WEIGHT
+          );
+
+          // time to send our LSAUPDATE packet!
+          outToRemoteServer.writeObject(lsaUpdatePacket);
+
+        } catch (Exception e) {
+          String failedToConnectMessage =
+              "\n\nError: Failed to send data to remote IP "
+                  + remoteRouterDescription.simulatedIpAddress;
+          RouterUtils.alertExceptionToConsole(e, failedToConnectMessage);
+          // important to raise exception here to defer control flow & close connections
+          throw e;
+        }
+
+      }
+    } catch (Exception e) {
+      String alertMessageOfFailedHelloBroadcast =
+          "\n\nError: Failed to broadcast LsaUpdate.\n\n";
+      RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHelloBroadcast);
+    } finally {
+      RouterUtils.closeIoSocketConnection(clientSocket, null, outToRemoteServer);
+    }
+  }
+
+  /**
    * Broadcast Hello to neighbors.
    */
   private void processStart() {
@@ -297,6 +374,12 @@ public class Router {
           RouterUtils.handleHelloReplyAtClient(this, curLink, responsePacket);
           // time to send the final HELLO packet at this link!
           outToRemoteServer.writeObject(helloBroadcastPacket);
+
+          // ** surviving all of the above, it's time for an LSAUPDATE broadcast **
+
+          // inform all neighbors of our existence (ie. notify state of our LSD)
+          broadcastLsaUpdateToAllNeighbors();
+
         } catch (Exception e) {
           String alertMessageOfFailedRequestHandling =
               "\n\nError: Failed to handle response over client connection at socket "
@@ -382,10 +465,18 @@ public class Router {
   }
 
   /**
-   * Getter for last stored LSA of this router.
+   * Synchronized reader of last stored LSA for this router.
    */
-  LinkStateAdvertisement getLastLinkStateAdvertisement() {
+  synchronized LinkStateAdvertisement getLastLinkStateAdvertisement() {
     return this.lsd.getLastLinkStateAdvertisement(this.rd.simulatedIpAddress);
+  }
+
+  /**
+   * Synchronized writer of an input LSA for this writer.
+   */
+  private synchronized void putLinkStateAdvertisement(
+      LinkStateAdvertisement linkStateAdvertisement) {
+    lsd.putLinkStateAdvertisement(this.rd.simulatedIpAddress, linkStateAdvertisement);
   }
 
   /**
@@ -586,8 +677,7 @@ public class Router {
 
         // blocking wait to deserialize SospfPacket response
         SospfPacket responseFromClient =
-            RouterUtils
-                .deserializeSospfPacketFromInputStream(inFromRemoteServer, activeSocket);
+            RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, activeSocket);
 
         try {
           // the moment of truth: handle the response packet!
@@ -600,11 +690,29 @@ public class Router {
           // important to raise exception here to defer control flow
           throw e;
         }
+
+        // inform all neighbors of our existence (ie. notify state of our LSD)
+        broadcastLsaUpdateToAllNeighbors();
+
       } catch (Exception e) {
         String alertMessageOfFailedHelloHandling =
-            "\n\nError: Failed to handle HELLO request for packet "
-                + inputRequestPacket + " \n\n";
+            "\n\nError: Failed to handle HELLO request for packet '"
+                + inputRequestPacket + "' \n\n";
         RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHelloHandling);
+      }
+    }
+
+    /**
+     * A helper method to wrap logic of handling a single Lsa from the client.
+     */
+    private void handleSingleLsa(
+        String linkId, LinkStateAdvertisement linkStateAdvertisement) {
+      // synchronously retrieve the last lsa stored for this linkId
+      LinkStateAdvertisement prevLsa =
+          lsd.getLastLinkStateAdvertisement(linkId);
+      // write the lsa we are handling iff it is either the first, or has the latest seqNumber
+      if (prevLsa == null || prevLsa.lsaSeqNumber < linkStateAdvertisement.lsaSeqNumber) {
+        lsd.putLinkStateAdvertisement(linkId, linkStateAdvertisement);
       }
     }
 
@@ -612,7 +720,120 @@ public class Router {
      * Helper method to wrap logic of handling LSAUPDATE request.
      */
     private void handleLsaUpdateRequest(SospfPacket inputRequestPacket) {
-      // TODO: implement LsaUpdate handling
+      try {
+        if (inputRequestPacket == null) {
+          throw new Exception("Received null input request packet!");
+        }
+
+        // ready client router properties
+        String clientSimulatedIpAddress = inputRequestPacket.srcIp;
+        Vector<LinkStateAdvertisement> latestLsaArrayOfClient = inputRequestPacket.lsaArray;
+
+        // let's print something to notify what's happening
+        System.out.println("\n\nreceived LSAUPDATE from " + clientSimulatedIpAddress + ";");
+        System.out.println("\nprocessing LSAUPDATE...");
+
+        // before proceeding, we need to remember if this is the first time we've seen the client
+        boolean firstTimeClientSeen =
+            lsd.getLastLinkStateAdvertisement(clientSimulatedIpAddress) == null;
+
+        // iterate over each of packet's link state advertisements
+        for (LinkStateAdvertisement curLsa : latestLsaArrayOfClient) {
+          // handle each lsa independently
+          handleSingleLsa(curLsa.linkStateId, curLsa);
+        }
+
+        // ** at this point, the state of our link state database has been updated **
+        // ** next, we will need to update the state of our local ports **
+
+        // first, let's get the index of the port at which we are attached to the client
+        int indexOfAttachmentToClient =
+            RouterUtils.findIndexOfPortAttachedTo(ports, clientSimulatedIpAddress);
+
+        // and verify that we are indeed attached to the client at all
+        if (indexOfAttachmentToClient != RouterUtils.NO_PORT_AVAILABLE_FLAG) {
+          // if so, get the lsa persisted by our database update
+          LinkStateAdvertisement currentLinkStateAdvertisementOfClient =
+              lsd.getLastLinkStateAdvertisement(clientSimulatedIpAddress);
+
+          // specifically, we care about the updated links advertised by this lsa
+          LinkedList<LinkDescription> advertisedLinks = currentLinkStateAdvertisementOfClient.links;
+
+          // iterating over each advertised link, we seek changes directed at this router
+          boolean foundChangedLink = false;
+          short weightOfLink = RouterDescription.TRANSMISSION_WEIGHT_TO_SELF;
+          for (LinkDescription curLink : advertisedLinks) {
+            // check if the weight of a link targeted at this router has changed
+            weightOfLink = curLink.tosMetrics;
+            if (curLink.linkId.equals(rd.simulatedIpAddress)
+                && curLink.tosMetrics != RouterDescription.TRANSMISSION_WEIGHT_TO_SELF) {
+              // if so, set the appropriate flag and break from our loop
+              foundChangedLink = true;
+              break;
+            }
+          }
+
+          if (foundChangedLink) {
+            // ** if a link changed, update our local state to reflect the new weighting **
+
+            // start by updating the weight of the relevant link
+            ports[indexOfAttachmentToClient].weight = weightOfLink;
+
+            // ** to convey this change, we will need to update & broadcast our own Lsa **
+
+            // let's create a new LSA (derived from current LSD state) for this router
+            LinkStateAdvertisement myLinkStateAdvertisement =
+                RouterUtils.createLinkStateAdvertisement(Router.this);
+
+            // write the above LSA for this router to our own database
+            putLinkStateAdvertisement(myLinkStateAdvertisement);
+          }
+
+        }
+
+        // ** by this point, we should have covered any case requiring updates to our LSD **
+
+        // broadcast any changes of the LSD to our neighbors
+        if (firstTimeClientSeen) {
+          // including the client
+          broadcastLsaUpdateToAllNeighbors();
+        } else {
+          // TODO: of course, we should verify the below assumption in practice...
+        /* ** CRITICAL ASSUMPTION **
+         *
+         * Below, to avoid infinite LSAUPDATES, we exclude the client that initiated this handling.
+         *
+         * By doing this, the client will technically not see the corresponding LSA for changing
+         * the weight of one of our own links. **However** (provided our reasoning holds), this
+         * should not matter since the only information lost (ie. missing from the client's LSA)
+         * will be the following:
+         *
+         * 1. The sequence number of this router's latest LSA will not be updated.
+         * 2. A single linkDescription in that router's LSA has changed (due to the changed weight).
+         *
+         * With regards to (2), the client router will already know this since it was the one to
+         * broadcast that information. With regards to (1), the incorrect sequence number is not an
+         * issue on its own since the client router effectively has the state of the latest sequence
+         * number already. Consequently, since the client router's sequence number must then be
+         * lower than any sequence numbers following the missed LSA, it would receive these updates
+         * instead to reflect the latest state changes.
+         */
+
+          // excluding the client
+          broadcastLsaUpdateWithExcludedRemote(clientSimulatedIpAddress);
+        }
+
+        // output that we have finished handling this LSAUPDATE
+        System.out.println(
+            "\nFinished processing LSAUPDATE from " + clientSimulatedIpAddress + ";"
+        );
+
+      } catch (Exception e) {
+        String alertMessageOfFailedLsaUpdateHandling =
+            "\n\nError: Failed to handle LSAUPDATE request for packet '"
+                + inputRequestPacket + "' \n\n";
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedLsaUpdateHandling);
+      }
     }
 
     /**
