@@ -1,7 +1,12 @@
 package socs.network.node;
 
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Queue;
 import java.util.Vector;
 import socs.network.message.LinkDescription;
 import socs.network.message.LinkStateAdvertisement;
@@ -15,12 +20,12 @@ public class LinkStateDatabase {
   /**
    * Data store to map linkID (ie. simulated IP) => LinkStateAdvertisement instance.
    */
-  private HashMap<String, LinkStateAdvertisement> dataStore;
+  private final HashMap<String, LinkStateAdvertisement> dataStore;
 
   /**
    * Private description for the router maintaining this Link State Database.
    */
-  private RouterDescription rd = null;
+  private final RouterDescription rd;
 
   /**
    * Initialize database with single entry for this router.
@@ -30,9 +35,9 @@ public class LinkStateDatabase {
     LinkDescription linkDescriptionOfActiveRouter = new LinkDescription(
         rd.simulatedIpAddress,
         rd.processPortNumber,
-        RouterDescription.TRANSMISSION_WEIGHT_TO_SELF
+        (short) RouterDescription.TRANSMISSION_WEIGHT_TO_SELF
     );
-    LinkedList<LinkDescription> linkedListOfLinkDescriptions = new LinkedList<LinkDescription>();
+    LinkedList<LinkDescription> linkedListOfLinkDescriptions = new LinkedList<>();
     linkedListOfLinkDescriptions.add(linkDescriptionOfActiveRouter);
     // TODO: originally, NO_PREV_ADVERT constant was just INT.MIN_VAL - careful with this
     return new LinkStateAdvertisement(
@@ -52,7 +57,7 @@ public class LinkStateDatabase {
     }
     rd = routerDescription;
     LinkStateAdvertisement initialLsaRecord = initLinkStateDatabase();
-    dataStore = new HashMap<String, LinkStateAdvertisement>();
+    dataStore = new HashMap<>();
     dataStore.put(initialLsaRecord.linkStateId, initialLsaRecord);
   }
 
@@ -60,7 +65,7 @@ public class LinkStateDatabase {
    * Synchronized helper method to construct & return vector of database values.
    */
   synchronized Vector<LinkStateAdvertisement> getValuesVector() {
-    Vector<LinkStateAdvertisement> lsaArray = new Vector<LinkStateAdvertisement>();
+    Vector<LinkStateAdvertisement> lsaArray = new Vector<>();
     lsaArray.addAll(dataStore.values());
     return lsaArray;
   }
@@ -94,10 +99,32 @@ public class LinkStateDatabase {
 
   /**
    * Output the shortest path from this router to the destination with the given IP address.
+   * <p><br></p> Attribution: <p><br></p> Derived from pseudocode described at
+   * https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm
    */
-  String getShortestPath(String destinationIp) {
-    //TODO: fill the implementation here
-    return null;
+  synchronized String getShortestPath(String destinationIp) throws Exception {
+
+    // lock the data store so no one touches it while we're reading from it
+    synchronized (dataStore) {
+      // first, let's prepare our data structures
+      Map<String, Integer> dist = new HashMap<>();
+      Map<String, String> prev = new HashMap<>();
+      Queue<String> ipAddressQueue =
+          new PriorityQueue<>((Comparator.comparingInt(dist::get)));
+
+      // and, of course, make note of our source node id
+      String sourceNodeId = rd.simulatedIpAddress;
+
+      // from which, we will apply dijkstra's algorithm to compute the shortest path
+      List<String> shortestPath = LinkStateDatabaseUtils.computeShortestPathByDijkstra(
+          this, ipAddressQueue, dist, prev, sourceNodeId, destinationIp
+      );
+
+      // and return our shortest path in the expected string format
+      return LinkStateDatabaseUtils.getFormattedStringFromRouterIpPath(
+          this, shortestPath
+      );
+    }
   }
 
   /**
