@@ -3,6 +3,7 @@ package socs.network.node;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
+import java.net.SocketException;
 import java.util.LinkedList;
 import java.util.Vector;
 import socs.network.message.LinkDescription;
@@ -51,8 +52,15 @@ final class RouterUtils {
    * Static helper method to construct LinkedList of LinkDescriptions from advertiser's Link[] ports
    * array.
    */
-  static LinkedList<LinkDescription> getListOfLinkDescriptions(Link[] ports) {
+  static LinkedList<LinkDescription> getListOfLinkDescriptions(
+      RouterDescription rd, Link[] ports) {
+    LinkDescription linkDescriptionOfActiveRouter = new LinkDescription(
+        rd.simulatedIpAddress,
+        rd.processPortNumber,
+        (short) RouterDescription.TRANSMISSION_WEIGHT_TO_SELF
+    );
     LinkedList<LinkDescription> linkedListOfLinkDescriptions = new LinkedList<LinkDescription>();
+    linkedListOfLinkDescriptions.add(linkDescriptionOfActiveRouter);
     for (Link curLink : ports) {
       // skip any null links
       if (curLink == null) {
@@ -101,17 +109,19 @@ final class RouterUtils {
 
     int prevSeqNumber = lastLsa.lsaSeqNumber;
     int newSeqNumber;
-    // there was a prior link state advertisement by this router
     if (prevSeqNumber == LinkStateAdvertisement.NO_PREVIOUS_ADVERTISEMENTS_FLAG) {
       // this link state advertisement is the advertiser's first
       newSeqNumber = LinkStateAdvertisement.MIN_SEQ_NUMBER;
     } else {
+      // there was a prior link state advertisement by this router
       // increment the LSA's sequence number
       newSeqNumber = prevSeqNumber + 1;
     }
 
     // construct LinkedList of LinkDescriptions from advertiser's Link[] ports array
-    LinkedList<LinkDescription> newLinks = getListOfLinkDescriptions(advertisingRouter.ports);
+    LinkedList<LinkDescription> newLinks = getListOfLinkDescriptions(
+        advertisingRouter.rd, advertisingRouter.ports
+    );
 
     return new LinkStateAdvertisement(linkStateId, newSeqNumber, newLinks);
   }
@@ -268,8 +278,15 @@ final class RouterUtils {
       if (activeSocket == null) {
         throw new IllegalArgumentException("Received null socket connection!");
       }
-      // attempt to read raw binary of packet as generic object
-      Object inputRequestRaw = inFromRemoteServer.readObject();
+      Object inputRequestRaw = null;
+      try {
+        // attempt to read raw binary of packet as generic object
+        inputRequestRaw = inFromRemoteServer.readObject();
+      } catch (SocketException e) {
+        // FIXME: might be dangerous too fail here but there are so many connection resets...
+        // for socket exceptions, we fail silently
+        return null;
+      }
       if (inputRequestRaw == null) {
         throw new Exception("Received empty input packet!");
       }

@@ -25,6 +25,11 @@ public class SospfPacket implements Serializable {
   public static final short SOSPF_LSAUPDATE = 1;
 
   /**
+   * Int constant to flag that the SospfPacket weightOfTransmission is irrelevant.
+   */
+  public static final short IRRELEVANT_TRANSMISSION_WEIGHT = Short.MIN_VALUE;
+
+  /**
    * Process IP address of source router.
    */
   public final String srcProcessIp;

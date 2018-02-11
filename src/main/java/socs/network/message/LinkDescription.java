@@ -21,12 +21,12 @@ public class LinkDescription implements Serializable {
   /**
    * Weight of this link.
    */
-  public final int tosMetrics;
+  public final short tosMetrics;
 
   /**
    * Constructor to instantiate an SospfPacket with required input parameters.
    */
-  public LinkDescription(String linkId, int processPortNum, int tosMetrics) {
+  public LinkDescription(String linkId, int processPortNum, short tosMetrics) {
     if (CommonUtils.isNullOrEmptyString(linkId)) {
       throw new IllegalArgumentException(
           "Cannot instantiate LinkDescription with null or empty link id."

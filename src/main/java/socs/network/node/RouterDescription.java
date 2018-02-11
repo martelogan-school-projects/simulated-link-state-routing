@@ -18,7 +18,7 @@ class RouterDescription {
   /**
    * Int constant to flag minimum weight of transmission (ie. current router).
    */
-  static final short TRANSMISSION_WEIGHT_TO_SELF = Short.MIN_VALUE;
+  static final int TRANSMISSION_WEIGHT_TO_SELF = 0;
 
   /**
    * Process IP tied to this router's exposed socket instance.
