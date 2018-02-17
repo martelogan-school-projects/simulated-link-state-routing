@@ -349,13 +349,15 @@ final class RouterUtils {
         // disconnect the attachment locally
         int portIndex =
             RouterUtils.findIndexOfPortAttachedTo(clientRouter.ports, responsePacket.srcIp);
-        clientRouter.detachLinkAtPortIndex(portIndex);
         RouterUtils.alertNoPortsAvailableAtRemote(responsePacket);
+        clientRouter.detachLinkAtPortIndex(portIndex);
         break;
       case SospfPacket.SOSPF_HELLO:
+      case SospfPacket.SOSPF_CONNECT:
         RouterUtils.respondAtClientToHelloReply(curLink, responsePacket);
         break;
       case SospfPacket.SOSPF_LSAUPDATE:
+      case SospfPacket.SOSPF_DISCONNECT:
         RouterUtils.raiseInvalidResponseException(packetType);
         break;
       default:
@@ -393,9 +395,11 @@ final class RouterUtils {
     short packetType = responsePacket.sospfType;
     switch (packetType) {
       case SospfPacket.SOSPF_HELLO:
+      case SospfPacket.SOSPF_CONNECT:
         RouterUtils.respondAtRemoteToHelloReply(curLink, responsePacket);
         break;
       case SospfPacket.SOSPF_LSAUPDATE:
+      case SospfPacket.SOSPF_DISCONNECT:
       case SospfPacket.SOSPF_NO_PORTS_AVAILABLE:
         RouterUtils.raiseInvalidResponseException(packetType);
         break;

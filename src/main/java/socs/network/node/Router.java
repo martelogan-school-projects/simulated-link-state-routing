@@ -51,6 +51,11 @@ public class Router {
   final Link[] ports = new Link[NUM_PORTS_PER_ROUTER];
 
   /**
+   * Boolean to track whether the Router has yet to run start.
+   */
+  private boolean hasRunStart = false;
+
+  /**
    * Constructor to instantiate a Router via input RouterConfiguration parameters.
    */
   public Router(RouterConfiguration config) throws Exception {
@@ -105,6 +110,9 @@ public class Router {
 
   }
 
+  /**
+   * Synchronized helper method to write the current state of this router to database.
+   */
   private synchronized void writeLinkStateOfThisRouterToDatabase() throws Exception {
     // let's create a new LSA (derived from current LSD state) for this router
     LinkStateAdvertisement myLinkStateAdvertisement =
@@ -150,6 +158,10 @@ public class Router {
           "Port index '" + portIndex + "is invalid. Unable to detach link.");
     } else {
       ports[portIndex] = null;
+      System.out.println(
+          "\n\nSuccessfully detached from remote neighbor at port index " + portIndex + ".\n\n"
+      );
+
     }
 
   }
@@ -158,9 +170,110 @@ public class Router {
    * Disconnect with the router identified by the given destination ip address. Notice: this command
    * should trigger the synchronization of database
    *
-   * @param portNumber the port number which the link attaches at
+   * @param portIndex the port index at which the link attaches
    */
-  private void processDisconnect(short portNumber) {
+  private void processDisconnect(short portIndex) {
+    if (RouterUtils.isPortIndexInvalid(portIndex)) {
+      throw new IllegalArgumentException(
+          "Port index '" + portIndex + "is invalid. Unable to detach link.");
+    }
+    Link attachedLink = ports[portIndex];
+    if (attachedLink == null) {
+      System.out.println("\n\nNo link to detach at port index " + portIndex + ".\n\n");
+      return;
+    }
+
+    RouterDescription remoteRouterDescription = attachedLink.targetRouter;
+    if (remoteRouterDescription.status != RouterStatus.TWO_WAY) {
+      System.out.println("\n\nDetaching uninitialized link at port index " + portIndex + ".\n\n");
+      detachLinkAtPortIndex(portIndex);
+      return;
+    }
+
+    // declare local variables reused over iterations
+    Socket clientSocket = null;
+    ObjectInputStream inFromRemoteServer = null;
+    ObjectOutputStream outToRemoteServer = null;
+    String remoteSimulatedIp = remoteRouterDescription.simulatedIpAddress;
+    String remoteProcessIp = remoteRouterDescription.processIpAddress;
+    short remoteProcessPort = remoteRouterDescription.processPortNumber;
+
+    SospfPacket disConnectBroadcastPacket = null;
+
+    try {
+      try {
+        // let's attempt a connection
+        clientSocket = new Socket(remoteProcessIp, remoteProcessPort);
+        // IMPORTANT: must establish output stream first to enable input stream setup
+        outToRemoteServer = new ObjectOutputStream(clientSocket.getOutputStream());
+        inFromRemoteServer = new ObjectInputStream(clientSocket.getInputStream());
+
+        // successfully connected, let's get our SospfPacket ready
+
+        disConnectBroadcastPacket = RouterUtils.buildSospfPacketFromRouterDescriptions(
+            this.rd, remoteRouterDescription,
+            SospfPacket.SOSPF_DISCONNECT, null, SospfPacket.IRRELEVANT_TRANSMISSION_WEIGHT
+        );
+
+        // time to send our DISCONNECT packet!
+        outToRemoteServer.writeObject(disConnectBroadcastPacket);
+
+      } catch (Exception e) {
+        String failedToConnectMessage =
+            "\n\nError: Failed to send data to remote IP " + remoteSimulatedIp;
+        RouterUtils.alertExceptionToConsole(e, failedToConnectMessage);
+        // important to raise exception here to defer control flow & close connections
+        throw e;
+      }
+
+      // having made it this far, we now proceed to wait for a reply
+
+      // blocking wait to deserialize SospfPacket response
+      SospfPacket responseFromRemote =
+          RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, clientSocket);
+
+      try {
+        if (responseFromRemote == null) {
+          throw new Exception("Received null response from remote.");
+        }
+        short sospfType = responseFromRemote.sospfType;
+        if (sospfType == SospfPacket.SOSPF_DISCONNECT) {
+          // success: let's disconnect locally from the remote
+          detachLinkAtPortIndex(portIndex);
+        } else {
+          throw new Exception(
+              "Remote failed to acknowledge disconnect request.\n"
+                  + "Responded with (SospfType = '" + sospfType + "')."
+          );
+        }
+      } catch (Exception e) {
+        String alertMessageOfFailedHelloResponseHandling =
+            "\n\nError: Failed to handle final CONNECT packet over client connection at socket "
+                + clientSocket + " \n\n";
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHelloResponseHandling);
+        // important to raise exception here to defer control flow
+        throw e;
+      }
+
+      // update our link state database with the results of this conversation
+      writeLinkStateOfThisRouterToDatabase();
+
+      // then synchronize our LSD with the remote
+      synchronizeLsaUpdateOverActiveConnection(
+          clientSocket, inFromRemoteServer, outToRemoteServer, remoteRouterDescription
+      );
+
+    } catch (Exception e) {
+      String alertMessageOfFailedHelloBroadcast =
+          "\n\nError: Failed to broadcast CONNECT for ( link = " + attachedLink + " ) \n\n";
+      RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHelloBroadcast);
+    } finally {
+      RouterUtils.closeIoSocketConnection(clientSocket, inFromRemoteServer, outToRemoteServer);
+    }
+
+    // having synchronously resolved our client connection,
+    // we now asynchronously update other neighbors
+    broadcastLsaUpdateWithExcludedRemote(remoteSimulatedIp);
 
   }
 
@@ -174,7 +287,8 @@ public class Router {
         return true;
       case RouterUtils.DUPLICATE_ATTACHMENT_ATTEMPT_FLAG:
         System.out.println("\n\nError: cannot attach twice to a given remote IP.");
-        System.out.println("Please enter a valid remote IP address at which to attach.\n\n");
+        System.out.println("Please enter a another remote IP address at which to attach\nor first"
+            + "disconnect from this remote IP if you wish to change the network topology.\n\n");
         return true;
       default:
         if (RouterUtils.isPortIndexInvalid(portIndex)) {
@@ -193,15 +307,12 @@ public class Router {
   }
 
   /**
-   * Attach the link to the remote router, which is identified by the given simulated ip. To
-   * establish the connection via socket, you need to identify the process IP and process Port.
-   * Additionally, weight is the cost of transmitting data through the link.
-   * <p/>
-   * NOTE: This command should not trigger link database synchronization
+   * Helper method to sanitize input arguments of an attempted attachment.
    */
-  private void processAttach(String remoteProcessIp, short remoteProcessPort,
-      String remoteSimulatedIp, short linkWeight) {
-
+  static void verifyAttachmentArgs(
+      String remoteProcessIp, short remoteProcessPort,
+      String remoteSimulatedIp, short linkWeight
+  ) {
     if (CommonUtils.isNullOrEmptyString(remoteProcessIp)) {
       throw new IllegalArgumentException("Cannot attach to empty or null remote process IP.");
     }
@@ -225,6 +336,20 @@ public class Router {
               + RouterDescription.TRANSMISSION_WEIGHT_TO_SELF + "."
       );
     }
+  }
+
+  /**
+   * Attach the link to the remote router, which is identified by the given simulated ip. To
+   * establish the connection via socket, you need to identify the process IP and process Port.
+   * Additionally, weight is the cost of transmitting data through the link.
+   * <p/>
+   * NOTE: This command should not trigger link database synchronization
+   */
+  private void processAttach(String remoteProcessIp, short remoteProcessPort,
+      String remoteSimulatedIp, short linkWeight) {
+
+    // sanitize input arguments
+    verifyAttachmentArgs(remoteProcessIp, remoteProcessPort, remoteSimulatedIp, linkWeight);
 
     // verify that we are not attempting self-attachment
     if (remoteSimulatedIp.equals(this.rd.simulatedIpAddress)) {
@@ -420,9 +545,63 @@ public class Router {
   }
 
   /**
+   * Helper method to synchronously broadcast an LSAUPDATE over an active connection.
+   */
+  private void synchronizeLsaUpdateOverActiveConnection(
+      Socket clientSocket, ObjectInputStream inFromRemoteServer,
+      ObjectOutputStream outToRemoteServer, RouterDescription remoteRouterDescription)
+      throws Exception {
+
+    /* NOTE: By design, the client will synchronously wait for our initial LSAUPDATE before
+    *  attempting to send its own (as a means to avoid stepping over each other's socket setup).
+    */
+    try {
+      // first, get the state of our lsd as a vector of the database values
+      Vector<LinkStateAdvertisement> lsaArray = lsd.getValuesVector();
+
+      // from this, we can construct our lsaUpdatePacket
+      SospfPacket lsaUpdatePacket = RouterUtils.buildSospfPacketFromRouterDescriptions(
+          this.rd, remoteRouterDescription,
+          SospfPacket.SOSPF_LSAUPDATE, lsaArray, SospfPacket.IRRELEVANT_TRANSMISSION_WEIGHT
+      );
+
+      // time to send our LSAUPDATE packet!
+      outToRemoteServer.writeObject(lsaUpdatePacket);
+    } catch (Exception e) {
+      String alertMessageOfFailedSendLsaUpdate =
+          "\n\nError: Failed to send LSAUPDATE over client connection at socket "
+              + clientSocket + " \n\n";
+      RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedSendLsaUpdate);
+      // important to raise exception here to defer control flow
+      throw e;
+    }
+
+    // ** analogous to our writing to the remote, we now wait on the remote's response **
+    // blocking wait to deserialize another SospfPacket response
+    SospfPacket responseFromRemote =
+        RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, clientSocket);
+
+    try {
+      // now, let's actually process the state changes
+      processStateChangesOfLsaUpdate(responseFromRemote);
+    } catch (Exception e) {
+      String alertMessageOfFailedLsaUpdateResponseHandling =
+          "\n\nError: Failed to handle remote's initial LSAUPDATE over active connection "
+              + "at socket " + clientSocket + " \n\n";
+      RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedLsaUpdateResponseHandling);
+      // important to raise exception here to defer control flow
+      throw e;
+    }
+
+  }
+
+  /**
    * Broadcast Hello to neighbors.
    */
   private void processStart() {
+
+    // flag that we have ran start at least once
+    hasRunStart = true;
 
     // boolean to flag attempt at HELLO broadcast
     boolean attemptedHelloBroadcast = false;
@@ -504,51 +683,13 @@ public class Router {
           throw e;
         }
 
-        /* ** DESIGN DECISION **
-         *
-         * At this stage, surviving the HELLO conversation, we must also LSAUPDATE the remote.
-         *
-         * By design, the client will synchronously wait for our initial LSAUPDATE before
-         * attempting to send its own (as a means to avoid stepping over each other's socket setup).
-         */
+        // update our link state database with the results of this conversation
+        writeLinkStateOfThisRouterToDatabase();
 
-        try {
-          // first, get the state of our lsd as a vector of the database values
-          Vector<LinkStateAdvertisement> lsaArray = lsd.getValuesVector();
-
-          // from this, we can construct our lsaUpdatePacket
-          SospfPacket lsaUpdatePacket = RouterUtils.buildSospfPacketFromRouterDescriptions(
-              this.rd, remoteRouterDescription,
-              SospfPacket.SOSPF_LSAUPDATE, lsaArray, SospfPacket.IRRELEVANT_TRANSMISSION_WEIGHT
-          );
-
-          // time to send our LSAUPDATE packet!
-          outToRemoteServer.writeObject(lsaUpdatePacket);
-        } catch (Exception e) {
-          String alertMessageOfFailedSendLsaUpdate =
-              "\n\nError: Failed to send LSAUPDATE over client connection at socket "
-                  + clientSocket + " \n\n";
-          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedSendLsaUpdate);
-          // important to raise exception here to defer control flow
-          throw e;
-        }
-
-        // ** analogous to our writing to the remote, we now wait on the remote's response **
-        // blocking wait to deserialize another SospfPacket response
-        responseFromRemote =
-            RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, clientSocket);
-
-        try {
-          // now, let's actually process the state changes
-          processStateChangesOfLsaUpdate(responseFromRemote);
-        } catch (Exception e) {
-          String alertMessageOfFailedLsaUpdateResponseHandling =
-              "\n\nError: Failed to handle remote's initial LSAUPDATE over active connection "
-                  + "at socket " + clientSocket + " \n\n";
-          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedLsaUpdateResponseHandling);
-          // important to raise exception here to defer control flow
-          throw e;
-        }
+        // then synchronize our LSD with the remote
+        synchronizeLsaUpdateOverActiveConnection(
+            clientSocket, inFromRemoteServer, outToRemoteServer, remoteRouterDescription
+        );
 
       } catch (Exception e) {
         String alertMessageOfFailedHelloBroadcast =
@@ -575,8 +716,95 @@ public class Router {
    * <p/>
    * This command does trigger the link database synchronization
    */
-  private void processConnect(String processIp, short processPort,
-      String simulatedIp, short weight) {
+  private void processConnect(String remoteProcessIp, short remoteProcessPort,
+      String remoteSimulatedIp, short linkWeight) {
+
+    if (!hasRunStart) {
+      System.out.println("\n\nPlease run start at least once before running connect.\n\n");
+      return;
+    }
+
+    // if start has already ran, let's attach to the requested router
+    processAttach(remoteProcessIp, remoteProcessPort, remoteSimulatedIp, linkWeight);
+
+    // get the link at which we've just attached (surviving processAttach, this should succeed)
+    int indexOfAttachment = RouterUtils.findIndexOfPortAttachedTo(ports, remoteSimulatedIp);
+
+    if (indexOfAttachment == SospfPacket.SOSPF_NO_PORTS_AVAILABLE) {
+      return;
+    }
+
+    Link curLink = ports[indexOfAttachment];
+
+    // declare local variables reused over iterations
+    RouterDescription remoteRouterDescription = curLink.targetRouter;
+    Socket clientSocket = null;
+    ObjectInputStream inFromRemoteServer = null;
+    ObjectOutputStream outToRemoteServer = null;
+
+    SospfPacket connectBroadcastPacket = null;
+
+    try {
+      try {
+        // let's attempt a connection
+        clientSocket = new Socket(remoteProcessIp, remoteProcessPort);
+        // IMPORTANT: must establish output stream first to enable input stream setup
+        outToRemoteServer = new ObjectOutputStream(clientSocket.getOutputStream());
+        inFromRemoteServer = new ObjectInputStream(clientSocket.getInputStream());
+
+        // successfully connected, let's get our SospfPacket ready
+
+        connectBroadcastPacket = RouterUtils.buildSospfPacketFromRouterDescriptions(
+            this.rd, remoteRouterDescription,
+            SospfPacket.SOSPF_CONNECT, null, linkWeight
+        );
+
+        // time to send our CONNECT packet!
+        outToRemoteServer.writeObject(connectBroadcastPacket);
+
+      } catch (Exception e) {
+        String failedToConnectMessage =
+            "\n\nError: Failed to send data to remote IP " + remoteSimulatedIp;
+        RouterUtils.alertExceptionToConsole(e, failedToConnectMessage);
+        // important to raise exception here to defer control flow & close connections
+        throw e;
+      }
+
+      // having made it this far, we now proceed to wait for a reply
+
+      // blocking wait to deserialize SospfPacket response
+      SospfPacket responseFromRemote =
+          RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, clientSocket);
+
+      try {
+        // the moment of truth: handle the reply to our HELLO broadcast!
+        RouterUtils.handleHelloReplyAtClient(this, curLink, responseFromRemote);
+        // time to send the final CONNECT packet at this link!
+        outToRemoteServer.writeObject(connectBroadcastPacket);
+
+      } catch (Exception e) {
+        String alertMessageOfFailedHelloResponseHandling =
+            "\n\nError: Failed to handle final CONNECT packet over client connection at socket "
+                + clientSocket + " \n\n";
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHelloResponseHandling);
+        // important to raise exception here to defer control flow
+        throw e;
+      }
+      synchronizeLsaUpdateOverActiveConnection(
+          clientSocket, inFromRemoteServer, outToRemoteServer, remoteRouterDescription
+      );
+
+    } catch (Exception e) {
+      String alertMessageOfFailedHelloBroadcast =
+          "\n\nError: Failed to broadcast CONNECT for ( link = " + curLink + " ) \n\n";
+      RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHelloBroadcast);
+    } finally {
+      RouterUtils.closeIoSocketConnection(clientSocket, inFromRemoteServer, outToRemoteServer);
+    }
+
+    // having synchronously resolved our client connection,
+    // we now asynchronously update other neighbors
+    broadcastLsaUpdateWithExcludedRemote(remoteSimulatedIp);
 
   }
 
@@ -620,7 +848,19 @@ public class Router {
    */
 
   private void processQuit() {
+    int portIndex;
+    for (portIndex = 0; portIndex < NUM_PORTS_PER_ROUTER; portIndex++) {
+      Link curLink = ports[portIndex];
+      if (curLink != null && curLink.targetRouter.status == RouterStatus.TWO_WAY) {
+        processDisconnect((short) portIndex);
+      }
+    }
 
+    System.out.println(
+        "\n\nSuccessfully quit router at IP address " + rd.simulatedIpAddress + ".\n\n"
+    );
+
+    System.exit(0);
   }
 
   /**
@@ -671,7 +911,7 @@ public class Router {
                   cmdLine[3], Short.parseShort(cmdLine[4]));
             } else if (command.equals("start")) {
               processStart();
-            } else if (command.equals("connect")) {
+            } else if (command.startsWith("connect")) {
               String[] cmdLine = command.split(" ");
               processConnect(cmdLine[1], Short.parseShort(cmdLine[2]),
                   cmdLine[3], Short.parseShort(cmdLine[4]));
@@ -746,6 +986,12 @@ public class Router {
           case SospfPacket.SOSPF_LSAUPDATE:
             handleLsaUpdateRequest(inputRequestPacket);
             break;
+          case SospfPacket.SOSPF_CONNECT:
+            handleConnectRequest(inputRequestPacket);
+            break;
+          case SospfPacket.SOSPF_DISCONNECT:
+            handleDisconnectRequest(inputRequestPacket);
+            break;
           default:
             String exceptionMessageOfFailedSospfPacketRouting =
                 "Received packet with unknown (SospfPacketType = " + packetType + " ) ";
@@ -762,13 +1008,146 @@ public class Router {
     }
 
     /**
+     * Helper method to synchronously broadcast an LSAUPDATE over an active connection.
+     */
+    private void handleLsdSynchronizationWithClient(
+        ObjectInputStream inFromRemoteServer, ObjectOutputStream outToRemoteServer,
+        String clientSimulatedIpAddress) throws Exception {
+
+      /* NOTE: By design, we will synchronously wait for the client's initial LSAUPDATE before
+      * attempting to send our own (as a means to avoid stepping over each other's socket setup).
+      */
+
+      // blocking wait to deserialize another SospfPacket response
+      SospfPacket responseFromClient =
+          RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, activeSocket);
+
+      try {
+        // now, let's actually process the state changes
+        processStateChangesOfLsaUpdate(responseFromClient);
+      } catch (Exception e) {
+        String alertMessageOfFailedLsaUpdateResponseHandling =
+            "\n\nError: Failed to handle client's initial LSAUPDATE over active connection "
+                + "at socket " + activeSocket + " \n\n";
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedLsaUpdateResponseHandling);
+        // important to raise exception here to defer control flow
+        throw e;
+      }
+
+      // ** by this point, we should have covered any case requiring updates to our LSD **
+
+      // update our link state database with the results of this conversation
+      writeLinkStateOfThisRouterToDatabase();
+
+      // ** analogous to our waiting on the client, the client now waits on our LSAUPDATE **
+
+      try {
+        // first, get the state of our lsd as a vector of the database values
+        Vector<LinkStateAdvertisement> lsaArray = lsd.getValuesVector();
+
+        // from this, we can construct our lsaUpdatePacket
+        SospfPacket lsaUpdatePacket = new SospfPacket(
+            rd.processIpAddress, rd.processPortNumber, rd.simulatedIpAddress,
+            clientSimulatedIpAddress, SospfPacket.SOSPF_LSAUPDATE,
+            rd.simulatedIpAddress, rd.simulatedIpAddress, lsaArray,
+            SospfPacket.IRRELEVANT_TRANSMISSION_WEIGHT
+        );
+
+        // time to send our LSAUPDATE packet!
+        outToRemoteServer.writeObject(lsaUpdatePacket);
+      } catch (Exception e) {
+        String alertMessageOfFailedSendLsaUpdate =
+            "\n\nError: Failed to send LSAUPDATE over client connection at socket "
+                + activeSocket + " \n\n";
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedSendLsaUpdate);
+        // important to raise exception here to defer control flow
+        throw e;
+      }
+
+    }
+
+    /**
      * Helper method to wrap logic of handling HELLO request.
      */
     private void handleHelloRequest(SospfPacket inputRequestPacket) {
+      handleHelloConversation(inputRequestPacket, false);
+    }
+
+    /**
+     * Helper method to wrap logic of handling CONNECT request.
+     */
+    private void handleConnectRequest(SospfPacket inputRequestPacket) {
+      handleHelloConversation(inputRequestPacket, true);
+    }
+
+    /**
+     * Helper method to wrap logic of handling DISCONNECT request.
+     */
+    private void handleDisconnectRequest(SospfPacket inputRequestPacket) {
       try {
         if (inputRequestPacket == null) {
           throw new Exception("Received null input request packet!");
         }
+
+        // ready client router properties
+        String clientSimulatedIpAddress = inputRequestPacket.srcIp;
+
+        // find port at which to link remote router
+        int indexOfPort = RouterUtils.findIndexOfPortAttachedTo(ports, clientSimulatedIpAddress);
+
+        // ensure that we are indeed attached to the client router
+        if (indexOfPort == RouterUtils.NO_PORT_AVAILABLE_FLAG) {
+          throw new Exception("Received invalid disconnect request.");
+        }
+
+        // otherwise, let's indeed detach the client
+        detachLinkAtPortIndex(indexOfPort);
+
+        // add back the prompt
+        System.out.print(">> ");
+
+        // ** surviving all the above, we'll send an ACK to the client **
+
+        // construct response packet (first DISCONNECT reply)
+        SospfPacket replyToClient = new SospfPacket(
+            rd.processIpAddress, rd.processPortNumber, rd.simulatedIpAddress,
+            clientSimulatedIpAddress, SospfPacket.SOSPF_DISCONNECT,
+            rd.simulatedIpAddress, rd.simulatedIpAddress, null,
+            SospfPacket.IRRELEVANT_TRANSMISSION_WEIGHT
+        );
+
+        // send response packet to client
+        outToRemoteServer.writeObject(replyToClient);
+
+        // now, finally, we can synchronize our lsd with the client
+        handleLsdSynchronizationWithClient(
+            inFromRemoteServer, outToRemoteServer, clientSimulatedIpAddress
+        );
+
+        // having synchronized the client, we now asynchronously update other neighbors
+        broadcastLsaUpdateWithExcludedRemote(clientSimulatedIpAddress);
+      } catch (Exception e) {
+        String alertMessageOfFailedDisconnectHandling =
+            "\n\nError: Failed to handle DISCONNECT request for packet '"
+                + inputRequestPacket + "' \n\n";
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedDisconnectHandling);
+      }
+    }
+
+    /**
+     * Helper method to wrap logic of processing HELLO conversation.
+     */
+    private void handleHelloConversation(
+        SospfPacket inputRequestPacket, boolean isConnectConversation) {
+      try {
+        if (inputRequestPacket == null) {
+          throw new Exception("Received null input request packet!");
+        }
+
+        // adjust to either HELLO or CONNECT conversation
+        short responseType;
+        responseType =
+            (isConnectConversation) ? SospfPacket.SOSPF_CONNECT : SospfPacket.SOSPF_HELLO;
 
         // ready client router properties
         String clientProcessIpAddress = inputRequestPacket.srcProcessIp;
@@ -834,7 +1213,7 @@ public class Router {
         // construct response packet (first HELLO reply)
         SospfPacket replyToClient = new SospfPacket(
             rd.processIpAddress, rd.processPortNumber, rd.simulatedIpAddress,
-            clientSimulatedIpAddress, SospfPacket.SOSPF_HELLO,
+            clientSimulatedIpAddress, responseType,
             rd.simulatedIpAddress, rd.simulatedIpAddress, null, weightOfTransmission
         );
 
@@ -857,61 +1236,12 @@ public class Router {
           throw e;
         }
 
-        /* ** DESIGN DECISION **
-         *
-         * At this stage, surviving the HELLO conversation, we expect an LSAUPDATE from the client.
-         *
-         * By design, we will synchronously wait for the client's initial LSAUPDATE before
-         * attempting to send our own (as a means to avoid stepping over each other's socket setup).
-         */
+        // let's synchronize our lsd with the client
+        handleLsdSynchronizationWithClient(
+            inFromRemoteServer, outToRemoteServer, clientSimulatedIpAddress
+        );
 
-        // blocking wait to deserialize another SospfPacket response
-        responseFromClient =
-            RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, activeSocket);
-
-        try {
-          // now, let's actually process the state changes
-          processStateChangesOfLsaUpdate(responseFromClient);
-        } catch (Exception e) {
-          String alertMessageOfFailedLsaUpdateResponseHandling =
-              "\n\nError: Failed to handle client's initial LSAUPDATE over active connection "
-                  + "at socket " + activeSocket + " \n\n";
-          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedLsaUpdateResponseHandling);
-          // important to raise exception here to defer control flow
-          throw e;
-        }
-
-        // ** by this point, we should have covered any case requiring updates to our LSD **
-
-        // update our link state database with the results of this conversation
-        writeLinkStateOfThisRouterToDatabase();
-
-        // ** analogous to our waiting on the client, the client now waits on our LSAUPDATE **
-
-        try {
-          // first, get the state of our lsd as a vector of the database values
-          Vector<LinkStateAdvertisement> lsaArray = lsd.getValuesVector();
-
-          // from this, we can construct our lsaUpdatePacket
-          SospfPacket lsaUpdatePacket = new SospfPacket(
-              rd.processIpAddress, rd.processPortNumber, rd.simulatedIpAddress,
-              clientSimulatedIpAddress, SospfPacket.SOSPF_LSAUPDATE,
-              rd.simulatedIpAddress, rd.simulatedIpAddress, lsaArray,
-              SospfPacket.IRRELEVANT_TRANSMISSION_WEIGHT
-          );
-
-          // time to send our LSAUPDATE packet!
-          outToRemoteServer.writeObject(lsaUpdatePacket);
-        } catch (Exception e) {
-          String alertMessageOfFailedSendLsaUpdate =
-              "\n\nError: Failed to send LSAUPDATE over client connection at socket "
-                  + activeSocket + " \n\n";
-          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedSendLsaUpdate);
-          // important to raise exception here to defer control flow
-          throw e;
-        }
-
-        // having synchronously updated the client, we now asynchronously update other neighbors
+        // having synchronized the client, we now asynchronously update other neighbors
         broadcastLsaUpdateWithExcludedRemote(clientSimulatedIpAddress);
 
       } catch (Exception e) {
