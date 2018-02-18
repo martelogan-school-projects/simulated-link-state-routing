@@ -41,7 +41,7 @@ From the command line, we can initialize a router instance by first assembling a
 
 followed by: 
     ```
-       java -cp "<project-directory>/target/COMP535-1.0-SNAPSHOT-jar-with-dependencies.jar" <project-directory>/<router-num>.conf
+       java -jar "<project-directory>/target/COMP535-1.0-SNAPSHOT-jar-with-dependencies.jar" <project-directory>/<router-num>.conf
     ```
 
 Above, we would perform the router instantiation once per terminal window for each of the routers we intend to instantiate in our network. Of course, the above could also be achieved by a multiple terminal window setup and passing in program arguments via IntelliJ.
