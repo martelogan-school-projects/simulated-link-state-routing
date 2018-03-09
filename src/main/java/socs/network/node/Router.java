@@ -385,32 +385,40 @@ public class Router {
   /**
    * A helper method to wrap logic of handling a single Lsa from the client.
    */
-  private void handleSingleLsa(
+  private boolean handleSingleLsa(
       String linkId, LinkStateAdvertisement linkStateAdvertisement) {
+    boolean changedLsdState = false;
     // synchronously retrieve the last lsa stored for this linkId
     LinkStateAdvertisement prevLsa =
         lsd.getLastLinkStateAdvertisement(linkId);
     // write the lsa we are handling iff it is either the first, or has the latest seqNumber
     if (prevLsa == null || prevLsa.lsaSeqNumber < linkStateAdvertisement.lsaSeqNumber) {
       lsd.putLinkStateAdvertisement(linkId, linkStateAdvertisement);
+      changedLsdState = true;
     }
+    return changedLsdState;
   }
 
   /**
    * Helper method to process all state changes of an LSAUPDATE.
    */
-  private void processStateChangesOfLsaUpdate(SospfPacket inputRequestPacket) throws Exception {
+  private boolean processStateChangesOfLsaUpdate(SospfPacket inputRequestPacket) throws Exception {
     if (inputRequestPacket == null) {
       throw new Exception("Received null input request packet!");
     }
+    // ready boolean to track effect of processing lsa update
+    boolean changedLsdState = false;
     // ready client router properties
     String clientSimulatedIpAddress = inputRequestPacket.srcIp;
     Vector<LinkStateAdvertisement> latestLsaArrayOfClient = inputRequestPacket.lsaArray;
-
+    boolean curLsaHasChangedLsdState;
     // iterate over each of packet's link state advertisements
     for (LinkStateAdvertisement curLsa : latestLsaArrayOfClient) {
       // handle each lsa independently
-      handleSingleLsa(curLsa.linkStateId, curLsa);
+      curLsaHasChangedLsdState = handleSingleLsa(curLsa.linkStateId, curLsa);
+      if (curLsaHasChangedLsdState) {
+        changedLsdState = true;
+      }
     }
     // ** at this point, the state of our link state database has been updated **
     // ** next, we will need to update the state of our local ports **
@@ -429,32 +437,28 @@ public class Router {
       LinkedList<LinkDescription> advertisedLinks = currentLinkStateAdvertisementOfClient.links;
 
       // iterating over each advertised link, we seek changes directed at this router
-      boolean foundChangedLink = false;
       short weightOfLink = RouterDescription.TRANSMISSION_WEIGHT_TO_SELF;
       for (LinkDescription curLink : advertisedLinks) {
         // check if the weight of a link targeted at this router has changed
         weightOfLink = curLink.tosMetrics;
         if (curLink.linkId.equals(rd.simulatedIpAddress)
-            && curLink.tosMetrics != RouterDescription.TRANSMISSION_WEIGHT_TO_SELF) {
-          // if so, set the appropriate flag and break from our loop
-          foundChangedLink = true;
+            && weightOfLink != ports[indexOfAttachmentToClient].weight) {
+          // ** if a link changed, update our local state to reflect the new weighting **
+
+          // start by updating the weight of the relevant link
+          ports[indexOfAttachmentToClient].weight = weightOfLink;
+
+          // ** to convey this change, we will need to update & broadcast our own Lsa **
+
+          // in order to do so, let's write the link state of our router to the database
+          writeLinkStateOfThisRouterToDatabase();
           break;
         }
       }
 
-      if (foundChangedLink) {
-        // ** if a link changed, update our local state to reflect the new weighting **
-
-        // start by updating the weight of the relevant link
-        ports[indexOfAttachmentToClient].weight = weightOfLink;
-
-        // ** to convey this change, we will need to update & broadcast our own Lsa **
-
-        // in order to do so, let's write the link state of our router to the database
-        writeLinkStateOfThisRouterToDatabase();
-      }
-
     }
+
+    return changedLsdState;
   }
 
   /**
@@ -1269,7 +1273,8 @@ public class Router {
             lsd.getLastLinkStateAdvertisement(clientSimulatedIpAddress) == null;
 
         // now, let's actually process the state changes
-        processStateChangesOfLsaUpdate(inputRequestPacket);
+        boolean lsaProcessingHasChangedLsdState =
+            processStateChangesOfLsaUpdate(inputRequestPacket);
 
         // ** by this point, we should have covered any case requiring updates to our LSD **
 
@@ -1297,10 +1302,15 @@ public class Router {
          * number already. Consequently, since the client router's sequence number must then be
          * lower than any sequence numbers following the missed LSA, it would receive these updates
          * instead to reflect the latest state changes.
+         *
+         * Also, we only bother to broadcast at all if something actually changed in our database.
          */
 
-          // excluding the client
-          broadcastLsaUpdateWithExcludedRemote(clientSimulatedIpAddress);
+          // only broadcast to our neighbors if our lsd has changed
+          if (lsaProcessingHasChangedLsdState) {
+            // excluding the client that initiated this lsa processing
+            broadcastLsaUpdateWithExcludedRemote(clientSimulatedIpAddress);
+          }
         }
 
       } catch (Exception e) {
