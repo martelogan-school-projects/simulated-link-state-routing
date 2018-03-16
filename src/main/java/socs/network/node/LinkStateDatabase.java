@@ -1,12 +1,10 @@
 package socs.network.node;
 
-import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.PriorityQueue;
-import java.util.Queue;
 import java.util.Vector;
 import socs.network.message.LinkDescription;
 import socs.network.message.LinkStateAdvertisement;
@@ -104,20 +102,28 @@ public class LinkStateDatabase {
    */
   synchronized String getShortestPath(String destinationIp) throws Exception {
 
+    LinkStateAdvertisement lastLsaOfDestination = dataStore.get(destinationIp);
+
+    if (lastLsaOfDestination == null || lastLsaOfDestination.hasShutdown) {
+      System.out.println(
+          "\n\nCannot detect shortest path to IP '" + destinationIp
+              + "' because there is no path to it in our network.\n\n"
+      );
+      return null;
+    }
+
     // lock the data store so no one touches it while we're reading from it
     synchronized (dataStore) {
       // first, let's prepare our data structures
       Map<String, Integer> dist = new HashMap<>();
       Map<String, String> prev = new HashMap<>();
-      Queue<String> ipAddressQueue =
-          new PriorityQueue<>((Comparator.comparingInt(dist::get)));
 
       // and, of course, make note of our source node id
       String sourceNodeId = rd.simulatedIpAddress;
 
       // from which, we will apply dijkstra's algorithm to compute the shortest path
       List<String> shortestPath = LinkStateDatabaseUtils.computeShortestPathByDijkstra(
-          this, ipAddressQueue, dist, prev, sourceNodeId, destinationIp
+          this, new HashSet<>(), dist, prev, sourceNodeId, destinationIp
       );
 
       // and return our shortest path in the expected string format

@@ -6,7 +6,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
-import java.util.Queue;
+import java.util.Set;
 import socs.network.message.LinkDescription;
 import socs.network.message.LinkStateAdvertisement;
 
@@ -31,7 +31,7 @@ final class LinkStateDatabaseUtils {
    */
   private static void initializeDijkstraStructures(
       LinkStateDatabase linkStateDatabase,
-      Queue<String> ipAddressQueue, Map<String, Integer> dist,
+      Set<String> ipAddressQueue, Map<String, Integer> dist,
       Map<String, String> prev, String sourceNodeId) {
 
     // we'll start by iterating over each LSA record in our database
@@ -86,7 +86,7 @@ final class LinkStateDatabaseUtils {
    */
   static List<String> computeShortestPathByDijkstra(
       LinkStateDatabase linkStateDatabase,
-      Queue<String> ipAddressQueue, Map<String, Integer> dist,
+      Set<String> ipAddressQueue, Map<String, Integer> dist,
       Map<String, String> prev, String sourceNodeId, String destinationNodeId) throws Exception {
 
     // first, let's initialize our data structures
@@ -104,7 +104,19 @@ final class LinkStateDatabaseUtils {
     while (!ipAddressQueue.isEmpty()) {
 
       // get & remove the node with minimum distance in our queue
-      curNodeId = ipAddressQueue.poll();
+      int minDistSoFar = Integer.MAX_VALUE;
+      String minNodeIdSoFar = (String) ipAddressQueue.toArray()[0];
+      int nodeDistance;
+      for (String nodeId : ipAddressQueue) {
+        nodeDistance = dist.get(nodeId);
+        if (nodeDistance < minDistSoFar) {
+          minDistSoFar = nodeDistance;
+          minNodeIdSoFar = nodeId;
+        }
+      }
+      // pop the minimum node from our queue
+      ipAddressQueue.remove(minNodeIdSoFar);
+      curNodeId = minNodeIdSoFar;
 
       // break iff we found the node we are looking for!
       if (curNodeId.equals(destinationNodeId)) {

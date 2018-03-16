@@ -270,7 +270,8 @@ final class RouterUtils {
    * Static method to deserialize SospfPacket from given input stream.
    */
   static SospfPacket deserializeSospfPacketFromInputStream(
-      ObjectInputStream inFromRemoteServer, Socket activeSocket) throws Exception {
+      ObjectInputStream inFromRemoteServer, Socket activeSocket, boolean suppressEofExceptionAlert)
+      throws Exception {
     try {
       if (inFromRemoteServer == null) {
         throw new IllegalArgumentException("Received null input stream!");
@@ -283,7 +284,7 @@ final class RouterUtils {
         // attempt to read raw binary of packet as generic object
         inputRequestRaw = inFromRemoteServer.readObject();
       } catch (SocketException e) {
-        // FIXME: might be dangerous too fail here but there are so many connection resets...
+        // FIXME: might be dangerous to fail here but there are so many connection resets...
         // for socket exceptions, we fail silently
         return null;
       }
@@ -293,10 +294,12 @@ final class RouterUtils {
       // attempt to deserialize packet to expected SospfPacket object
       return (SospfPacket) inputRequestRaw;
     } catch (Exception e) {
-      String alertMessageOfFailedInputStreamParsing =
-          "\n\nError: Failed to parse input stream to SospfPacket at socket '"
-              + activeSocket + "' \n\n";
-      RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedInputStreamParsing);
+      if (!suppressEofExceptionAlert) {
+        String alertMessageOfFailedInputStreamParsing =
+            "\n\nError: Failed to parse input stream to SospfPacket at socket '"
+                + activeSocket + "' \n\n";
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedInputStreamParsing);
+      }
       // important to raise exception here to defer control flow & close connections
       throw e;
     }
@@ -358,6 +361,7 @@ final class RouterUtils {
         break;
       case SospfPacket.SOSPF_LSAUPDATE:
       case SospfPacket.SOSPF_DISCONNECT:
+      case SospfPacket.SOSPF_HEARTBEAT:
         RouterUtils.raiseInvalidResponseException(packetType);
         break;
       default:
@@ -400,6 +404,7 @@ final class RouterUtils {
         break;
       case SospfPacket.SOSPF_LSAUPDATE:
       case SospfPacket.SOSPF_DISCONNECT:
+      case SospfPacket.SOSPF_HEARTBEAT:
       case SospfPacket.SOSPF_NO_PORTS_AVAILABLE:
         RouterUtils.raiseInvalidResponseException(packetType);
         break;

@@ -35,6 +35,11 @@ public class SospfPacket implements Serializable {
   public static final short SOSPF_DISCONNECT = 3;
 
   /**
+   * Int constant to flag that SospfPacket is a HEARTBEAT request.
+   */
+  public static final short SOSPF_HEARTBEAT = 4;
+
+  /**
    * Int constant to flag that the SospfPacket weightOfTransmission is irrelevant.
    */
   public static final short IRRELEVANT_TRANSMISSION_WEIGHT = Short.MIN_VALUE;
@@ -120,7 +125,8 @@ public class SospfPacket implements Serializable {
     }
     if (sospfType != SOSPF_NO_PORTS_AVAILABLE
         && sospfType != SOSPF_HELLO && sospfType != SOSPF_LSAUPDATE
-        && sospfType != SOSPF_CONNECT && sospfType != SOSPF_DISCONNECT) {
+        && sospfType != SOSPF_CONNECT && sospfType != SOSPF_DISCONNECT
+        && sospfType != SOSPF_HEARTBEAT) {
       throw new IllegalArgumentException(
           "Tried to instantiate SOSPF Packet with invalid SOSPF Type = '" + sospfType + "'."
       );

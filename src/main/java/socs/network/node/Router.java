@@ -8,6 +8,8 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.LinkedList;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.Vector;
 import socs.network.message.LinkDescription;
 import socs.network.message.LinkStateAdvertisement;
@@ -34,6 +36,16 @@ public class Router {
    * Int constant for max value of attempted port assignment.
    */
   static final short MAX_PROCESS_PORT_NUMBER = Short.MAX_VALUE;
+
+  /**
+   * Int constant for heartbeat interval (in milliseconds).
+   */
+  static final int HEARTBEAT_WAIT_TIME = 5000;
+
+  /**
+   * Int constant for max retry of a heartbeat ping.
+   */
+  static final int HEARTBEAT_MAX_RETRY = 5;
 
   /**
    * LSD instance for this router (captures state of this router's knowledge on LSA broadcasts).
@@ -108,6 +120,9 @@ public class Router {
     System.out.println("Process Port Number = " + rd.processPortNumber);
     System.out.println("\n");
 
+    // and init scheduled jobs for periodic heartbeats
+    initHeartbeatCycle();
+
   }
 
   /**
@@ -153,6 +168,7 @@ public class Router {
    * Helper method to remove an attachment from the Link[] ports array.
    */
   void detachLinkAtPortIndex(int portIndex) {
+
     if (RouterUtils.isPortIndexInvalid(portIndex)) {
       throw new IllegalArgumentException(
           "Port index '" + portIndex + "is invalid. Unable to detach link.");
@@ -163,7 +179,6 @@ public class Router {
       );
 
     }
-
   }
 
   /**
@@ -172,7 +187,7 @@ public class Router {
    *
    * @param portIndex the port index at which the link attaches
    */
-  private void processDisconnect(short portIndex) {
+  private void processDisconnect(short portIndex, boolean isRouterShutdown) {
     if (RouterUtils.isPortIndexInvalid(portIndex)) {
       throw new IllegalArgumentException(
           "Port index '" + portIndex + "is invalid. Unable to detach link.");
@@ -230,7 +245,8 @@ public class Router {
 
       // blocking wait to deserialize SospfPacket response
       SospfPacket responseFromRemote =
-          RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, clientSocket);
+          RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer,
+              clientSocket, false);
 
       try {
         if (responseFromRemote == null) {
@@ -257,6 +273,21 @@ public class Router {
 
       // update our link state database with the results of this conversation
       writeLinkStateOfThisRouterToDatabase();
+
+      if (isRouterShutdown) {
+        // get the latest lsa we just committed
+        LinkStateAdvertisement lastLsa =
+            getLastLinkStateAdvertisement();
+
+        // flag that we are shutting down
+        lastLsa.hasShutdown = true;
+
+        // increment the lsa seq number
+        lastLsa.lsaSeqNumber = lastLsa.lsaSeqNumber + 1;
+
+        // write this to our lsd
+        lsd.putLinkStateAdvertisement(rd.simulatedIpAddress, lastLsa);
+      }
 
       // then synchronize our LSD with the remote
       synchronizeLsaUpdateOverActiveConnection(
@@ -357,6 +388,11 @@ public class Router {
       System.out.println("Please enter a valid remote IP address at which to attach.\n\n");
       return;
     }
+    if (remoteProcessPort == this.rd.processPortNumber) {
+      System.out.println("\n\nError: cannot input process port number of current router.");
+      System.out.println("Please enter a valid remote process port at which to attach.\n\n");
+      return;
+    }
 
     // find free port at which to link remote router
     int indexOfFreePort = RouterUtils.findIndexOfFreePort(ports, remoteSimulatedIp);
@@ -392,7 +428,8 @@ public class Router {
     LinkStateAdvertisement prevLsa =
         lsd.getLastLinkStateAdvertisement(linkId);
     // write the lsa we are handling iff it is either the first, or has the latest seqNumber
-    if (prevLsa == null || prevLsa.lsaSeqNumber < linkStateAdvertisement.lsaSeqNumber) {
+    if (prevLsa == null || prevLsa.lsaSeqNumber < linkStateAdvertisement.lsaSeqNumber
+        || (prevLsa.hasShutdown && !linkStateAdvertisement.hasShutdown)) {
       lsd.putLinkStateAdvertisement(linkId, linkStateAdvertisement);
       changedLsdState = true;
     }
@@ -583,7 +620,8 @@ public class Router {
     // ** analogous to our writing to the remote, we now wait on the remote's response **
     // blocking wait to deserialize another SospfPacket response
     SospfPacket responseFromRemote =
-        RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, clientSocket);
+        RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer,
+            clientSocket, false);
 
     try {
       // now, let's actually process the state changes
@@ -670,7 +708,8 @@ public class Router {
 
         // blocking wait to deserialize SospfPacket response
         SospfPacket responseFromRemote =
-            RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, clientSocket);
+            RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer,
+                clientSocket, false);
 
         try {
           // the moment of truth: handle the reply to our HELLO broadcast!
@@ -778,7 +817,8 @@ public class Router {
 
       // blocking wait to deserialize SospfPacket response
       SospfPacket responseFromRemote =
-          RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, clientSocket);
+          RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer,
+              clientSocket, false);
 
       try {
         // the moment of truth: handle the reply to our HELLO broadcast!
@@ -794,6 +834,11 @@ public class Router {
         // important to raise exception here to defer control flow
         throw e;
       }
+
+      // update our link state database with the results of this conversation
+      writeLinkStateOfThisRouterToDatabase();
+
+      // then synchronize our LSD with the remote
       synchronizeLsaUpdateOverActiveConnection(
           clientSocket, inFromRemoteServer, outToRemoteServer, remoteRouterDescription
       );
@@ -856,7 +901,7 @@ public class Router {
     for (portIndex = 0; portIndex < NUM_PORTS_PER_ROUTER; portIndex++) {
       Link curLink = ports[portIndex];
       if (curLink != null && curLink.targetRouter.status == RouterStatus.TWO_WAY) {
-        processDisconnect((short) portIndex);
+        processDisconnect((short) portIndex, true);
       }
     }
 
@@ -906,7 +951,7 @@ public class Router {
               processDetect(cmdLine[1]);
             } else if (command.startsWith("disconnect")) {
               String[] cmdLine = command.split(" ");
-              processDisconnect(Short.parseShort(cmdLine[1]));
+              processDisconnect(Short.parseShort(cmdLine[1]), false);
             } else if (command.startsWith("quit")) {
               processQuit();
             } else if (command.startsWith("attach")) {
@@ -996,6 +1041,9 @@ public class Router {
           case SospfPacket.SOSPF_DISCONNECT:
             handleDisconnectRequest(inputRequestPacket);
             break;
+          case SospfPacket.SOSPF_HEARTBEAT:
+            handleHeartbeatRequest(inputRequestPacket);
+            break;
           default:
             String exceptionMessageOfFailedSospfPacketRouting =
                 "Received packet with unknown (SospfPacketType = " + packetType + " ) ";
@@ -1024,7 +1072,8 @@ public class Router {
 
       // blocking wait to deserialize another SospfPacket response
       SospfPacket responseFromClient =
-          RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, activeSocket);
+          RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer,
+              activeSocket, false);
 
       try {
         // now, let's actually process the state changes
@@ -1139,6 +1188,48 @@ public class Router {
     }
 
     /**
+     * Helper method to wrap logic of handling HEARTBEAT request.
+     */
+    private void handleHeartbeatRequest(SospfPacket inputRequestPacket) {
+      try {
+        if (inputRequestPacket == null) {
+          throw new Exception("Received null input request packet!");
+        }
+
+        // ready client router properties
+        String clientSimulatedIpAddress = inputRequestPacket.srcIp;
+
+        // find port at which to link remote router
+        int indexOfPort = RouterUtils.findIndexOfPortAttachedTo(ports, clientSimulatedIpAddress);
+
+        // ensure that we are indeed attached to the client router
+        if (indexOfPort == RouterUtils.NO_PORT_AVAILABLE_FLAG) {
+          // we are not currently attached to the client router...fail silently
+          return;
+        }
+
+        // ** surviving all the above, we'll send an ACK to the client **
+
+        // construct response packet (first HEARTBEAT reply)
+        SospfPacket replyToClient = new SospfPacket(
+            rd.processIpAddress, rd.processPortNumber, rd.simulatedIpAddress,
+            clientSimulatedIpAddress, SospfPacket.SOSPF_HEARTBEAT,
+            rd.simulatedIpAddress, rd.simulatedIpAddress, null,
+            SospfPacket.IRRELEVANT_TRANSMISSION_WEIGHT
+        );
+
+        // send response packet to client
+        outToRemoteServer.writeObject(replyToClient);
+
+      } catch (Exception e) {
+        String alertMessageOfFailedDisconnectHandling =
+            "\n\nError: Failed to handle HEARTBEAT request for packet '"
+                + inputRequestPacket + "' \n\n";
+        RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedDisconnectHandling);
+      }
+    }
+
+    /**
      * Helper method to wrap logic of processing HELLO conversation.
      */
     private void handleHelloConversation(
@@ -1226,7 +1317,8 @@ public class Router {
 
         // blocking wait to deserialize SospfPacket response
         SospfPacket responseFromClient =
-            RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, activeSocket);
+            RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer,
+                activeSocket, false);
 
         try {
           // the moment of truth: handle the HELLO packet!
@@ -1283,7 +1375,6 @@ public class Router {
           // including the client
           broadcastLsaUpdateToAllNeighbors();
         } else {
-          // TODO: of course, we should verify the below assumption in practice...
         /* ** CRITICAL ASSUMPTION **
          *
          * Below, to avoid infinite LSAUPDATES, we exclude the client that initiated this handling.
@@ -1346,7 +1437,8 @@ public class Router {
         }
         // attempt to deserialize packet to expected SospfPacket object
         SospfPacket inputRequestPacket =
-            RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer, activeSocket);
+            RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer,
+                activeSocket, false);
         try {
           // fail silently if the deserialized packet was null
           if (inputRequestPacket != null) {
@@ -1418,5 +1510,147 @@ public class Router {
         System.out.print(">> ");
       }
     }
+  }
+
+  /**
+   * Method to initiate pinging each of our neighbors to check for life.
+   */
+  private void initHeartbeatCycle() throws Exception {
+    // flag to check whether any state changed due to heartbeats
+    boolean heartbeatCycleHasChangedLsdState = false;
+
+    // prepare some reusable variables
+    Socket clientSocket = null;
+    ObjectInputStream inFromRemoteServer = null;
+    ObjectOutputStream outToRemoteServer = null;
+    RouterDescription remoteRouterDescription;
+    String remoteProcessIp;
+    int remoteProcessPortNumber;
+    short curLinkWeight;
+    // iterate over each link in our ports array to identify each neighbour
+    int portIndexOfCurLink;
+    for (portIndexOfCurLink = 0; portIndexOfCurLink < ports.length; portIndexOfCurLink++) {
+      Link curLink = ports[portIndexOfCurLink];
+      if (curLink != null) {
+        remoteRouterDescription = curLink.targetRouter;
+        if (remoteRouterDescription.status == RouterStatus.TWO_WAY) {
+          // found a neighbor: let's try to ping it
+          int numRetries = 0;
+          // retry as often as allowed
+          while (numRetries < HEARTBEAT_MAX_RETRY) {
+            try {
+              // let's prepare what we need to request a connection
+              remoteProcessIp = remoteRouterDescription.processIpAddress;
+              remoteProcessPortNumber = remoteRouterDescription.processPortNumber;
+              curLinkWeight = curLink.weight;
+
+              SospfPacket heartbeatPacket = null;
+
+              try {
+                try {
+                  // let's attempt a connection
+                  clientSocket = new Socket(remoteProcessIp, remoteProcessPortNumber);
+                  // IMPORTANT: must establish output stream first to enable input stream setup
+                  outToRemoteServer = new ObjectOutputStream(clientSocket.getOutputStream());
+                  inFromRemoteServer = new ObjectInputStream(clientSocket.getInputStream());
+
+                  // successfully connected, let's get our SospfPacket ready
+
+                  heartbeatPacket = RouterUtils.buildSospfPacketFromRouterDescriptions(
+                      this.rd, remoteRouterDescription,
+                      SospfPacket.SOSPF_HEARTBEAT, null, curLinkWeight
+                  );
+
+                  // time to send our HEARTBEAT packet!
+                  outToRemoteServer.writeObject(heartbeatPacket);
+
+                } catch (Exception e) {
+                  // important to raise exception here to defer control flow & close connections
+                  throw e;
+                }
+
+                // having made it this far, we now proceed to wait for a reply
+
+                // blocking wait to deserialize SospfPacket response
+                SospfPacket responseFromRemote =
+                    RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer,
+                        clientSocket, true);
+
+                try {
+                  if (responseFromRemote.sospfType != SospfPacket.SOSPF_HEARTBEAT) {
+                    throw new Exception("\n\nReceived invalid response packet.\n\n");
+                  }
+                } catch (Exception e) {
+                  // important to raise exception here to defer control flow
+                  throw e;
+                }
+              } catch (Exception e) {
+                RouterUtils.closeIoSocketConnection(clientSocket,
+                    inFromRemoteServer, outToRemoteServer);
+                throw e;
+              } finally {
+                RouterUtils.closeIoSocketConnection(clientSocket,
+                    inFromRemoteServer, outToRemoteServer);
+              }
+            } catch (Exception e) {
+              numRetries += 1;
+              continue;
+            }
+            // break out of the loop if we survive without exceptions
+            break;
+          }
+          // verify whether we failed to ping our neighbor
+          if (numRetries >= HEARTBEAT_MAX_RETRY) {
+
+            if (ports[portIndexOfCurLink] == null) {
+              // link has already been explicitly detached...let's not worry about it
+              continue;
+            }
+
+            String neighborIpAddress = remoteRouterDescription.simulatedIpAddress;
+
+            System.out.println("\n\nNo heartbeat heard for neighbor with IP: "
+                + neighborIpAddress + "\n\n");
+            detachLinkAtPortIndex(portIndexOfCurLink);
+            System.out.print(">> ");
+
+            // update our link state database with the results of this conversation
+            writeLinkStateOfThisRouterToDatabase();
+
+            // get the latest lsa for the dead neighbor
+            LinkStateAdvertisement lastLsaOfNeighbor =
+                lsd.getLastLinkStateAdvertisement(neighborIpAddress);
+
+            // flag that the neighbor has died
+            lastLsaOfNeighbor.hasShutdown = true;
+
+            // increment the lsa seq number
+            lastLsaOfNeighbor.lsaSeqNumber = lastLsaOfNeighbor.lsaSeqNumber + 1;
+
+            // write this to our lsd
+            lsd.putLinkStateAdvertisement(neighborIpAddress, lastLsaOfNeighbor);
+
+            heartbeatCycleHasChangedLsdState = true;
+          }
+        }
+      }
+    }
+    if (heartbeatCycleHasChangedLsdState) {
+      // notify our live neighbors of any state changes
+      broadcastLsaUpdateToAllNeighbors();
+    }
+    // schedule another heartbeat cycle
+    new Timer().schedule(new TimerTask() {
+      @Override
+      public void run() {
+        try {
+          initHeartbeatCycle();
+        } catch (Exception e) {
+          String alertMessageOfFailedHeartbeatCycle =
+              "\n\nError: Heartbeat cycle failed unexpectedly. \n\n";
+          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHeartbeatCycle);
+        }
+      }
+    }, HEARTBEAT_WAIT_TIME);
   }
 }

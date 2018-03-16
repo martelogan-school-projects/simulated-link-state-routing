@@ -27,7 +27,12 @@ public class LinkStateAdvertisement implements Serializable {
   /**
    * Version number imposing total order on sequence of broadcasts for this LSA.
    */
-  public final int lsaSeqNumber;
+  public int lsaSeqNumber;
+
+  /**
+   * Special flag for LSA of disconnected router.
+   */
+  public boolean hasShutdown = false;
 
   /**
    * List of Link Descriptions per link associated to this LSA.
