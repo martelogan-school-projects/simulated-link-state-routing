@@ -8,8 +8,6 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.LinkedList;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.Vector;
 import socs.network.message.LinkDescription;
 import socs.network.message.LinkStateAdvertisement;
@@ -21,6 +19,16 @@ import socs.network.utils.RouterConfiguration;
  * Encapsulating class for a router (ie. single node) in our network.
  */
 public class Router {
+
+  /**
+   * Int constant for heartbeat interval (in milliseconds).
+   */
+  public static final int HEARTBEAT_WAIT_TIME = 5000;
+
+  /**
+   * Int constant for max retry of a heartbeat ping.
+   */
+  static final int HEARTBEAT_MAX_RETRY = 5;
 
   /**
    * Int constant for fixed-size of ports array.
@@ -36,16 +44,6 @@ public class Router {
    * Int constant for max value of attempted port assignment.
    */
   static final short MAX_PROCESS_PORT_NUMBER = Short.MAX_VALUE;
-
-  /**
-   * Int constant for heartbeat interval (in milliseconds).
-   */
-  static final int HEARTBEAT_WAIT_TIME = 5000;
-
-  /**
-   * Int constant for max retry of a heartbeat ping.
-   */
-  static final int HEARTBEAT_MAX_RETRY = 5;
 
   /**
    * LSD instance for this router (captures state of this router's knowledge on LSA broadcasts).
@@ -120,20 +118,6 @@ public class Router {
     System.out.println("Process Port Number = " + rd.processPortNumber);
     System.out.println("\n");
 
-    // and init scheduled jobs for periodic heartbeats
-    initHeartbeatCycle();
-
-  }
-
-  /**
-   * Synchronized helper method to write the current state of this router to database.
-   */
-  private synchronized void writeLinkStateOfThisRouterToDatabase() throws Exception {
-    // let's create a new LSA (derived from current LSD state) for this router
-    LinkStateAdvertisement myLinkStateAdvertisement =
-        RouterUtils.createLinkStateAdvertisement(this);
-    // write the above LSA for this router to our own database
-    putLinkStateAdvertisement(myLinkStateAdvertisement);
   }
 
   /**
@@ -501,7 +485,7 @@ public class Router {
   /**
    * Helper method to broadcast an LSAUPDATE to all neighbors in our Link[] ports array.
    */
-  private void broadcastLsaUpdateToAllNeighbors() {
+  void broadcastLsaUpdateToAllNeighbors() {
     // simply pass in a null excludedRemoteIp so that no IP's are ignored
     broadcastLsaUpdateWithExcludedRemote(null);
   }
@@ -927,11 +911,38 @@ public class Router {
   }
 
   /**
+   * Synchronized reader of last stored LSA for a neighboring router.
+   */
+  synchronized LinkStateAdvertisement getLastLinkStateAdvertisement(
+      String neighborSimulatedIpAddress) {
+    return this.lsd.getLastLinkStateAdvertisement(neighborSimulatedIpAddress);
+  }
+
+  /**
    * Synchronized writer of an input LSA for this writer.
    */
   private synchronized void putLinkStateAdvertisement(
       LinkStateAdvertisement linkStateAdvertisement) {
     lsd.putLinkStateAdvertisement(this.rd.simulatedIpAddress, linkStateAdvertisement);
+  }
+
+  /**
+   * Synchronized writer of an input LSA for this writer.
+   */
+  synchronized void putLinkStateAdvertisement(
+      String neighborSimulatedIpAddress, LinkStateAdvertisement linkStateAdvertisement) {
+    lsd.putLinkStateAdvertisement(neighborSimulatedIpAddress, linkStateAdvertisement);
+  }
+
+  /**
+   * Synchronized helper method to write the current state of this router to database.
+   */
+  synchronized void writeLinkStateOfThisRouterToDatabase() throws Exception {
+    // let's create a new LSA (derived from current LSD state) for this router
+    LinkStateAdvertisement myLinkStateAdvertisement =
+        RouterUtils.createLinkStateAdvertisement(this);
+    // write the above LSA for this router to our own database
+    putLinkStateAdvertisement(myLinkStateAdvertisement);
   }
 
   /**
@@ -1515,142 +1526,142 @@ public class Router {
   /**
    * Method to initiate pinging each of our neighbors to check for life.
    */
-  private void initHeartbeatCycle() throws Exception {
-    // flag to check whether any state changed due to heartbeats
-    boolean heartbeatCycleHasChangedLsdState = false;
-
-    // prepare some reusable variables
-    Socket clientSocket = null;
-    ObjectInputStream inFromRemoteServer = null;
-    ObjectOutputStream outToRemoteServer = null;
-    RouterDescription remoteRouterDescription;
-    String remoteProcessIp;
-    int remoteProcessPortNumber;
-    short curLinkWeight;
-    // iterate over each link in our ports array to identify each neighbour
-    int portIndexOfCurLink;
-    for (portIndexOfCurLink = 0; portIndexOfCurLink < ports.length; portIndexOfCurLink++) {
-      Link curLink = ports[portIndexOfCurLink];
-      if (curLink != null) {
-        remoteRouterDescription = curLink.targetRouter;
-        if (remoteRouterDescription.status == RouterStatus.TWO_WAY) {
-          // found a neighbor: let's try to ping it
-          int numRetries = 0;
-          // retry as often as allowed
-          while (numRetries < HEARTBEAT_MAX_RETRY) {
-            try {
-              // let's prepare what we need to request a connection
-              remoteProcessIp = remoteRouterDescription.processIpAddress;
-              remoteProcessPortNumber = remoteRouterDescription.processPortNumber;
-              curLinkWeight = curLink.weight;
-
-              SospfPacket heartbeatPacket = null;
-
-              try {
-                try {
-                  // let's attempt a connection
-                  clientSocket = new Socket(remoteProcessIp, remoteProcessPortNumber);
-                  // IMPORTANT: must establish output stream first to enable input stream setup
-                  outToRemoteServer = new ObjectOutputStream(clientSocket.getOutputStream());
-                  inFromRemoteServer = new ObjectInputStream(clientSocket.getInputStream());
-
-                  // successfully connected, let's get our SospfPacket ready
-
-                  heartbeatPacket = RouterUtils.buildSospfPacketFromRouterDescriptions(
-                      this.rd, remoteRouterDescription,
-                      SospfPacket.SOSPF_HEARTBEAT, null, curLinkWeight
-                  );
-
-                  // time to send our HEARTBEAT packet!
-                  outToRemoteServer.writeObject(heartbeatPacket);
-
-                } catch (Exception e) {
-                  // important to raise exception here to defer control flow & close connections
-                  throw e;
-                }
-
-                // having made it this far, we now proceed to wait for a reply
-
-                // blocking wait to deserialize SospfPacket response
-                SospfPacket responseFromRemote =
-                    RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer,
-                        clientSocket, true);
-
-                try {
-                  if (responseFromRemote.sospfType != SospfPacket.SOSPF_HEARTBEAT) {
-                    throw new Exception("\n\nReceived invalid response packet.\n\n");
-                  }
-                } catch (Exception e) {
-                  // important to raise exception here to defer control flow
-                  throw e;
-                }
-              } catch (Exception e) {
-                RouterUtils.closeIoSocketConnection(clientSocket,
-                    inFromRemoteServer, outToRemoteServer);
-                throw e;
-              } finally {
-                RouterUtils.closeIoSocketConnection(clientSocket,
-                    inFromRemoteServer, outToRemoteServer);
-              }
-            } catch (Exception e) {
-              numRetries += 1;
-              continue;
-            }
-            // break out of the loop if we survive without exceptions
-            break;
-          }
-          // verify whether we failed to ping our neighbor
-          if (numRetries >= HEARTBEAT_MAX_RETRY) {
-
-            if (ports[portIndexOfCurLink] == null) {
-              // link has already been explicitly detached...let's not worry about it
-              continue;
-            }
-
-            String neighborIpAddress = remoteRouterDescription.simulatedIpAddress;
-
-            System.out.println("\n\nNo heartbeat heard for neighbor with IP: "
-                + neighborIpAddress + "\n\n");
-            detachLinkAtPortIndex(portIndexOfCurLink);
-            System.out.print(">> ");
-
-            // update our link state database with the results of this conversation
-            writeLinkStateOfThisRouterToDatabase();
-
-            // get the latest lsa for the dead neighbor
-            LinkStateAdvertisement lastLsaOfNeighbor =
-                lsd.getLastLinkStateAdvertisement(neighborIpAddress);
-
-            // flag that the neighbor has died
-            lastLsaOfNeighbor.hasShutdown = true;
-
-            // increment the lsa seq number
-            lastLsaOfNeighbor.lsaSeqNumber = lastLsaOfNeighbor.lsaSeqNumber + 1;
-
-            // write this to our lsd
-            lsd.putLinkStateAdvertisement(neighborIpAddress, lastLsaOfNeighbor);
-
-            heartbeatCycleHasChangedLsdState = true;
-          }
-        }
-      }
-    }
-    if (heartbeatCycleHasChangedLsdState) {
-      // notify our live neighbors of any state changes
-      broadcastLsaUpdateToAllNeighbors();
-    }
-    // schedule another heartbeat cycle
-    new Timer().schedule(new TimerTask() {
-      @Override
-      public void run() {
-        try {
-          initHeartbeatCycle();
-        } catch (Exception e) {
-          String alertMessageOfFailedHeartbeatCycle =
-              "\n\nError: Heartbeat cycle failed unexpectedly. \n\n";
-          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHeartbeatCycle);
-        }
-      }
-    }, HEARTBEAT_WAIT_TIME);
-  }
+//  private void initHeartbeatCycle() throws Exception {
+//    // flag to check whether any state changed due to heartbeats
+//    boolean heartbeatCycleHasChangedLsdState = false;
+//
+//    // prepare some reusable variables
+//    Socket clientSocket = null;
+//    ObjectInputStream inFromRemoteServer = null;
+//    ObjectOutputStream outToRemoteServer = null;
+//    RouterDescription remoteRouterDescription;
+//    String remoteProcessIp;
+//    int remoteProcessPortNumber;
+//    short curLinkWeight;
+//    // iterate over each link in our ports array to identify each neighbour
+//    int portIndexOfCurLink;
+//    for (portIndexOfCurLink = 0; portIndexOfCurLink < ports.length; portIndexOfCurLink++) {
+//      Link curLink = ports[portIndexOfCurLink];
+//      if (curLink != null) {
+//        remoteRouterDescription = curLink.targetRouter;
+//        if (remoteRouterDescription.status == RouterStatus.TWO_WAY) {
+//          // found a neighbor: let's try to ping it
+//          int numRetries = 0;
+//          // retry as often as allowed
+//          while (numRetries < HEARTBEAT_MAX_RETRY) {
+//            try {
+//              // let's prepare what we need to request a connection
+//              remoteProcessIp = remoteRouterDescription.processIpAddress;
+//              remoteProcessPortNumber = remoteRouterDescription.processPortNumber;
+//              curLinkWeight = curLink.weight;
+//
+//              SospfPacket heartbeatPacket = null;
+//
+//              try {
+//                try {
+//                  // let's attempt a connection
+//                  clientSocket = new Socket(remoteProcessIp, remoteProcessPortNumber);
+//                  // IMPORTANT: must establish output stream first to enable input stream setup
+//                  outToRemoteServer = new ObjectOutputStream(clientSocket.getOutputStream());
+//                  inFromRemoteServer = new ObjectInputStream(clientSocket.getInputStream());
+//
+//                  // successfully connected, let's get our SospfPacket ready
+//
+//                  heartbeatPacket = RouterUtils.buildSospfPacketFromRouterDescriptions(
+//                      this.rd, remoteRouterDescription,
+//                      SospfPacket.SOSPF_HEARTBEAT, null, curLinkWeight
+//                  );
+//
+//                  // time to send our HEARTBEAT packet!
+//                  outToRemoteServer.writeObject(heartbeatPacket);
+//
+//                } catch (Exception e) {
+//                  // important to raise exception here to defer control flow & close connections
+//                  throw e;
+//                }
+//
+//                // having made it this far, we now proceed to wait for a reply
+//
+//                // blocking wait to deserialize SospfPacket response
+//                SospfPacket responseFromRemote =
+//                    RouterUtils.deserializeSospfPacketFromInputStream(inFromRemoteServer,
+//                        clientSocket, true);
+//
+//                try {
+//                  if (responseFromRemote.sospfType != SospfPacket.SOSPF_HEARTBEAT) {
+//                    throw new Exception("\n\nReceived invalid response packet.\n\n");
+//                  }
+//                } catch (Exception e) {
+//                  // important to raise exception here to defer control flow
+//                  throw e;
+//                }
+//              } catch (Exception e) {
+//                RouterUtils.closeIoSocketConnection(clientSocket,
+//                    inFromRemoteServer, outToRemoteServer);
+//                throw e;
+//              } finally {
+//                RouterUtils.closeIoSocketConnection(clientSocket,
+//                    inFromRemoteServer, outToRemoteServer);
+//              }
+//            } catch (Exception e) {
+//              numRetries += 1;
+//              continue;
+//            }
+//            // break out of the loop if we survive without exceptions
+//            break;
+//          }
+//          // verify whether we failed to ping our neighbor
+//          if (numRetries >= HEARTBEAT_MAX_RETRY) {
+//
+//            if (ports[portIndexOfCurLink] == null) {
+//              // link has already been explicitly detached...let's not worry about it
+//              continue;
+//            }
+//
+//            String neighborIpAddress = remoteRouterDescription.simulatedIpAddress;
+//
+//            System.out.println("\n\nNo heartbeat heard for neighbor with IP: "
+//                + neighborIpAddress + "\n\n");
+//            detachLinkAtPortIndex(portIndexOfCurLink);
+//            System.out.print(">> ");
+//
+//            // update our link state database with the results of this conversation
+//            writeLinkStateOfThisRouterToDatabase();
+//
+//            // get the latest lsa for the dead neighbor
+//            LinkStateAdvertisement lastLsaOfNeighbor =
+//                lsd.getLastLinkStateAdvertisement(neighborIpAddress);
+//
+//            // flag that the neighbor has died
+//            lastLsaOfNeighbor.hasShutdown = true;
+//
+//            // increment the lsa seq number
+//            lastLsaOfNeighbor.lsaSeqNumber = lastLsaOfNeighbor.lsaSeqNumber + 1;
+//
+//            // write this to our lsd
+//            lsd.putLinkStateAdvertisement(neighborIpAddress, lastLsaOfNeighbor);
+//
+//            heartbeatCycleHasChangedLsdState = true;
+//          }
+//        }
+//      }
+//    }
+//    if (heartbeatCycleHasChangedLsdState) {
+//      // notify our live neighbors of any state changes
+//      broadcastLsaUpdateToAllNeighbors();
+//    }
+//    // schedule another heartbeat cycle
+//    new Timer().schedule(new TimerTask() {
+//      @Override
+//      public void run() {
+//        try {
+//          initHeartbeatCycle();
+//        } catch (Exception e) {
+//          String alertMessageOfFailedHeartbeatCycle =
+//              "\n\nError: Heartbeat cycle failed unexpectedly. \n\n";
+//          RouterUtils.alertExceptionToConsole(e, alertMessageOfFailedHeartbeatCycle);
+//        }
+//      }
+//    }, HEARTBEAT_WAIT_TIME);
+//  }
 }
