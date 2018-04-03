@@ -303,7 +303,7 @@ public class Router {
       case RouterUtils.DUPLICATE_ATTACHMENT_ATTEMPT_FLAG:
         System.out.println("\n\nError: cannot attach twice to a given remote IP.");
         System.out.println("Please enter a another remote IP address at which to attach\nor first"
-            + "disconnect from this remote IP if you wish to change the network topology.\n\n");
+            + " disconnect from this remote IP if you wish to change the network topology.\n\n");
         return true;
       default:
         if (RouterUtils.isPortIndexInvalid(portIndex)) {
@@ -361,7 +361,7 @@ public class Router {
    * NOTE: This command should not trigger link database synchronization
    */
   private void processAttach(String remoteProcessIp, short remoteProcessPort,
-      String remoteSimulatedIp, short linkWeight) {
+      String remoteSimulatedIp, short linkWeight) throws Exception {
 
     // sanitize input arguments
     verifyAttachmentArgs(remoteProcessIp, remoteProcessPort, remoteSimulatedIp, linkWeight);
@@ -370,12 +370,12 @@ public class Router {
     if (remoteSimulatedIp.equals(this.rd.simulatedIpAddress)) {
       System.out.println("\n\nError: cannot input IP of current router.");
       System.out.println("Please enter a valid remote IP address at which to attach.\n\n");
-      return;
+      throw new IllegalArgumentException("Bad input remote IP address.");
     }
     if (remoteProcessPort == this.rd.processPortNumber) {
       System.out.println("\n\nError: cannot input process port number of current router.");
       System.out.println("Please enter a valid remote process port at which to attach.\n\n");
-      return;
+      throw new IllegalArgumentException("Bad input remote process port number.");
     }
 
     // find free port at which to link remote router
@@ -383,7 +383,7 @@ public class Router {
 
     // return immediately if we were not able to find a valid port
     if (checkAndAlertPortOccupationStatus(indexOfFreePort)) {
-      return;
+      throw new Exception("Unable to assign port for input remote router.");
     }
 
     // a port was available, let's create a description for our remote router
@@ -498,8 +498,10 @@ public class Router {
 
     // declare local variables reused over iterations
     RouterDescription remoteRouterDescription;
+    String remoteSimulatedIp;
     String remoteProcessIp;
     short remoteProcessPortNumber;
+    LinkStateAdvertisement lastLsaOfRemoteNeighbor;
     Socket clientSocket = null;
     ObjectOutputStream outToRemoteServer = null;
     SospfPacket lsaUpdatePacket;
@@ -513,12 +515,20 @@ public class Router {
 
         // let's prepare what we need to request a connection
         remoteRouterDescription = curLink.targetRouter;
+        remoteSimulatedIp = remoteRouterDescription.simulatedIpAddress;
         remoteProcessIp = remoteRouterDescription.processIpAddress;
         remoteProcessPortNumber = remoteRouterDescription.processPortNumber;
 
+        // skip this link if we've already been informed that the neighbor has shutdown
+        lastLsaOfRemoteNeighbor = getLastLinkStateAdvertisement(remoteSimulatedIp);
+
+        if (lastLsaOfRemoteNeighbor != null && lastLsaOfRemoteNeighbor.hasShutdown) {
+          continue;
+        }
+
         // skip this link if it is equal to a provided exclusion IP
         if (excludedRemoteIp != null
-            && remoteRouterDescription.simulatedIpAddress.equals(excludedRemoteIp)) {
+            && remoteSimulatedIp.equals(excludedRemoteIp)) {
           continue;
         }
 
@@ -752,7 +762,12 @@ public class Router {
     }
 
     // if start has already ran, let's attach to the requested router
-    processAttach(remoteProcessIp, remoteProcessPort, remoteSimulatedIp, linkWeight);
+    try {
+      processAttach(remoteProcessIp, remoteProcessPort, remoteSimulatedIp, linkWeight);
+    } catch (Exception e) {
+      // fail silently (attachment should log its own errors)
+      return;
+    }
 
     // get the link at which we've just attached (surviving processAttach, this should succeed)
     int indexOfAttachment = RouterUtils.findIndexOfPortAttachedTo(ports, remoteSimulatedIp);
@@ -858,12 +873,14 @@ public class Router {
         if (remoteRouterDescription.status == RouterStatus.TWO_WAY) {
           System.out.println(
               "The IP Address of the TWO_WAY neighbour linked at outbound port index "
-                  + curPortIndex + " is: " + curLink.targetRouter.simulatedIpAddress + "\n");
+                  + curPortIndex + " is '" + curLink.targetRouter.simulatedIpAddress
+                  + "' with a link weight of " + curLink.weight + "\n");
         } else {
           System.out.println(
               "An attached router (lacking TWO_WAY status) is attached at outbound port index "
-                  + curPortIndex + " with IP address: "
-                  + curLink.targetRouter.simulatedIpAddress + "\n");
+                  + curPortIndex + " with IP address '"
+                  + curLink.targetRouter.simulatedIpAddress
+                  + "' and a link weight of " + curLink.weight + "\n");
         }
       }
       curPortIndex += 1;
@@ -967,8 +984,16 @@ public class Router {
               processQuit();
             } else if (command.startsWith("attach")) {
               String[] cmdLine = command.split(" ");
-              processAttach(cmdLine[1], Short.parseShort(cmdLine[2]),
-                  cmdLine[3], Short.parseShort(cmdLine[4]));
+              String remoteProcessIp = cmdLine[1];
+              short remoteProcessPort = Short.parseShort(cmdLine[2]);
+              String remoteSimulatedIp = cmdLine[3];
+              short linkWeight = Short.parseShort(cmdLine[4]);
+              try {
+                processAttach(remoteProcessIp, remoteProcessPort,
+                    remoteSimulatedIp, linkWeight);
+              } catch (Exception ignored) {
+                // fail silently (attach will log its own errors)
+              }
             } else if (command.equals("start")) {
               processStart();
             } else if (command.startsWith("connect")) {
