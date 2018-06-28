@@ -1,12 +1,13 @@
-COMP 535 - Simulated Link State Routing Protocol
-=================================================
-[![Build Status](https://travis-ci.com/martelogan/comp-535-networks-project.svg?branch=master&token=SqcHSz2GfDsZK3rYfejg )](https://travis-ci.com/martelogan/comp-535-networks-project)
+Simulated Link State Routing Protocol
+=====================================
+[![Build Status](https://travis-ci.com/martelogan/simulated-link-state-routing.svg?branch=master&token=SqcHSz2GfDsZK3rYfejg )](https://travis-ci.com/martelogan/simulated-link-state-routing)
 
 Description
 -------------
 
-This repo, initialized via the provided _comp535_sketch_code_,
-will serve as a base for Project Group 35's COMP 535 - Computer Networks Project. 
+This repo serves to host simuated link-state-routing application code developed end-to-end independently by Logan Martel, though initialized via the minimalist _comp535_sketch_code_ boilerplate provided in McGill's Winter 2018 offering of COMP 535 (Computer Networks). 
+
+(**NOTE:** although this project was intended as a group effort, and thus is organized here for collaborative purposes, it was - in practice - developed independently by Logan Martel, github username @[martelogan](https://github.com/martelogan))
 
 Installation
 -------------
@@ -61,7 +62,6 @@ License
 -------
 This code is under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.en.html).
 
-If you use or modify _comp-535-networks-project_, please credit the original authors as
+If you use or modify _martelogan/simulated-link-state-routing_, please credit the original author as
 
 * Logan Martel - https://github.com/martelogan
-* Abdullah Abudan - https://github.com/aabudan
