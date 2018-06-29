@@ -60,6 +60,7 @@ Afterwards, it will be possible to navigate the HTML reports from any web browse
 
 License
 -------
+
 This code is under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.en.html).
 
 If you use or modify _martelogan/simulated-link-state-routing_, please credit the original author as
